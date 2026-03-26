@@ -300,9 +300,9 @@ kit_name=$(pod5 inspect debug "$first_pod5_file" | \
            awk '/^[ \t]*sequencing_kit:/ { print toupper($2) }')
 
 # this should give us '1' for barcoded or '0' for non-barcode
-is_barcoded=1
-#is_barcoded=$(pod5 inspect debug "$first_pod5_file" | \
-#              grep -o "'barcoding_enabled': *'[^']*'" | sed -E "s/.*'([^']+)'$/\1/")
+#is_barcoded=1
+is_barcoded=$(pod5 inspect debug "$first_pod5_file" | \
+              grep -o "'barcoding_enabled': *'[^']*'" | sed -E "s/.*'([^']+)'$/\1/")
 
 if [[ -z "${kit_name:-}" ]]; then
 	read -ep "The program was not able to detect the sequencing kit. Please enter a sequencing kit name (e.g. SQK-LSK114): " kit_name
@@ -551,54 +551,23 @@ sequali "$temp_all_reads" \
 echo ">>>>>>>>>>> STATS & METRICS <<<<<<<<<<<" >> "$log"
 echo "" >> "$log"
 
-# changed logic to only open the sequencing summary file less times than before -> faster
-awk -F'\t' '
-NR==1 {
-	for (i=1; i<=NF; i++) {
-		if ($i=="mean_qscore_template") qcol=i;
-	        if ($i=="sequence_length_template") lencol=i;
-	        if ($i=="channel") chcol=i;
-	}
+# number of all reads
+jq '.summary["total_reads"]' "${submission_folder}/QC_outputs/${run_name}_all_reads/${run_name}_all.json" | awk '{printf "Total number of reads: %.2f M\n", $1/1e6}' >> "$log"
 
-	if (!qcol || !lencol || !chcol) {
-        	print "Error: required column not found in header." > "/dev/stderr";
-		exit 1;
-    	}
-	next
-}
+# number of pass reads
+jq '.summary["total_reads"]' "${submission_folder}/QC_outputs/${run_name}_pass_reads/${run_name}.pass.json" | awk '{printf "Total pass reads: %.2f M\n", $1/1e6}' >> "$log"
 
-{
-	q = $qcol;
-	len = $lencol;
-	ch = $chcol;
+# number of fail reads
+samtools view -c -@ "$cores" "${ubam_folder}/${run_name}.fail.bam" | awk '{printf "Total fail reads: %.2f M\n", $1/1e6}' >> "$log"
 
-	qsum += 10^(-q/10);
-	count++;
-
-	if (len > 40000) over40k++;
-	if (len > 100000) over100k++;
-	channels[ch]++;
-}
-
-END {
-	if (count > 0) {
-        	meanQ = -10 * log(qsum / count) / log(10);
-        	printf "Mean read quality: %.1f\n", meanQ;
-	}
-
-	printf "Number of reads > 40kb: %d reads\n", over40k;
-	printf "Number of reads > 100kb: %d reads\n", over100k;
-	printf "Active channels: %d\n", length(channels);
-}
-' "${submission_folder}/summaries/sequencing_summary_${run_name}.all.txt" >> "$log"
-
+# mean and median qscore for all reads
 awk -F'\t' '
 NR==1 {
 	for (i=1; i<=NF; i++) {
 		if ($i=="mean_qscore_template") qcol=i;
     	}
-	if (!qcol) {
-		print "Error: mean_qscore_template column not found." > "/dev/stderr";
+    	if (!qcol) {
+        	print "Error: mean_qscore_template column not found." >> "'"$log"'";
 		exit 1;
 	}
 	next
@@ -607,42 +576,95 @@ NR==1 {
 	print $qcol
 }
 ' "${submission_folder}/summaries/sequencing_summary_${run_name}.all.txt" | sort -n \
-| awk '{
-	count[NR] = $1
+| awk '
+{
+	scores[NR] = $1
+	sum += $1
 }
 END {
 	if (NR == 0) {
-		print "Median read quality: NA"
+        	print "Mean read quality (all reads): NA" >> "'"$log"'";
+        	print "Median read quality (all reads): NA" >> "'"$log"'";
+		exit
+	}
+
+	mean = sum / NR
+
+	if (NR % 2 == 1) {
+        	median = scores[(NR + 1) / 2]
+	} else {
+		median = (scores[NR / 2] + scores[NR / 2 + 1]) / 2
+	}
+
+	printf "Mean read quality (all reads): %.2f\n", mean >> "'"$log"'"
+	printf "Median read quality (all reads): %.2f\n", median >> "'"$log"'"
+}'
+
+# mean and median qscore for pass reads
+awk -F'\t' '
+NR==1 {
+        for (i=1; i<=NF; i++) {
+                if ($i=="mean_qscore_template") qcol=i;
+        }
+        if (!qcol) {
+                print "Error: mean_qscore_template column not found." >> "'"$log"'";
+                exit 1;
+        }
+        next
+}
+{
+        print $qcol
+}
+' "${submission_folder}/summaries/sequencing_summary_${run_name}.pass.txt" | sort -n \
+| awk '
+{
+        scores[NR] = $1
+        sum += $1
+}
+END {
+        if (NR == 0) {
+                print "Mean read quality (pass reads): NA" >> "'"$log"'";
+                print "Median read quality (pass reads): NA" >> "'"$log"'";
                 exit
         }
 
-        if (NR % 2 == 1) {
-                printf "Median read quality: %.1f\n", count[(NR + 1) / 2]
-        } else {
-                printf "Median read quality: %.1f\n", (count[NR / 2] + count[NR / 2 + 1]) / 2
-        }
-}' >> "$log"
+        mean = sum / NR
 
-# total number of bases, mean and median read length, and N50
+        if (NR % 2 == 1) {
+                median = scores[(NR + 1) / 2]
+        } else {
+                median = (scores[NR / 2] + scores[NR / 2 + 1]) / 2
+        }
+
+        printf "Mean read quality (pass reads): %.2f\n", mean >> "'"$log"'"
+        printf "Median read quality (pass reads): %.2f\n", median >> "'"$log"'"
+}'
+
+# total number of bases, mean and median read length, and N50 for all reads
 jq -r '.summary as $s | .sequence_length_distribution as $d |
 	[$s.total_bases, $s.mean_length, $d.n50, $d.q50] | @tsv' \
 	"${submission_folder}/QC_outputs/${run_name}_all_reads/${run_name}_all.json" |
 awk -F'\t' '{
-	printf "Total bases: %.2f Gb\n", $1/1e9
-	printf "Mean read length: %.1f bases\n", $2
-	printf "Read length N50: %.0f bases\n", $3
-	printf "Median read length: %.0f bases\n", $4
+	printf "Total bases (all reads): %.2f Gb\n", $1/1e9
+	printf "Mean read length (all reads): %.1f bases\n", $2
+	printf "Read length N50 (all reads): %.0f bases\n", $3
+	printf "Median read length (all reads): %.0f bases\n", $4
 }' >> "$log"
 
-# number of pass reads
-jq '.summary["total_reads"]' "${submission_folder}/QC_outputs/${run_name}_pass_reads/${run_name}.pass.json" | awk '{printf "Total pass reads: %.2f M\n", $1/1e6}' >> "$log"
+# total number of bases, mean and median read length, and N50 for pass reads
+jq -r '.summary as $s | .sequence_length_distribution as $d |
+        [$s.total_bases, $s.mean_length, $d.n50, $d.q50] | @tsv' \
+        "${submission_folder}/QC_outputs/${run_name}_pass_reads/${run_name}.pass.json" |
+awk -F'\t' '{
+        printf "Total bases (pass reads): %.2f Gb\n", $1/1e9
+        printf "Mean read length (pass reads): %.1f bases\n", $2
+        printf "Read length N50 (pass reads): %.0f bases\n", $3
+        printf "Median read length (pass reads): %.0f bases\n", $4
+}' >> "$log"
 
-# compute nubmer of failed reads
-samtools view -c -@ "$cores" "${ubam_folder}/${run_name}.fail.bam" | awk '{printf "Total fail reads: %.2f M\n", $1/1e6}' >> "$log"
-
-# print 5 longest reads with their associated qscores for all and pass reads
-echo "Top 5 longest reads formated as: length qscore" >> "$log"
-echo "for all reads:" >> "$log"
+# print 5 longest reads with their associated qscores for all reads
+echo "Top 5 longest reads formated as <length (qscore)>" >> "$log"
+echo "All reads:" >> "$log"
 awk -F'\t' '
 NR==1 {
 	for (i=1; i<=NF; i++) {
@@ -658,13 +680,14 @@ NR==1 {
 }
 
 {
-	print $lencol, $qcol
+	printf "%s\t%.2f\n", $lencol, $qcol
 }
 ' "${submission_folder}/summaries/sequencing_summary_${run_name}.all.txt" \
 | sort -k1,1nr \
 | awk 'NR<=5' >> "$log"
 
-echo "for pass reads:" >> "$log"
+# print 5 longest reads with their associated qscores for pass reads
+echo "Pass reads:" >> "$log"
 
 awk -F'\t' '
 NR==1 {
@@ -681,11 +704,93 @@ NR==1 {
 }
 
 {
-        print $lencol, $qcol
+        printf "%s\t%.2f\n", $lencol, $qcol
 }
 ' "${submission_folder}/summaries/sequencing_summary_${run_name}.pass.txt" \
 | sort -k1,1nr \
 | awk 'NR<=5' >> "$log"
+
+# number of reads > 40kb and > 100kb and number of active channels for all reads
+awk -F'\t' '
+NR==1 {
+        for (i=1; i<=NF; i++) {
+                if ($i=="mean_qscore_template") qcol=i;
+                if ($i=="sequence_length_template") lencol=i;
+                if ($i=="channel") chcol=i;
+        }
+
+        if (!qcol || !lencol || !chcol) {
+                print "Error: required column not found in header." > "/dev/stderr";
+                exit 1;
+        }
+        next
+}
+
+{
+        q = $qcol;
+        len = $lencol;
+        ch = $chcol;
+
+        qsum += 10^(-q/10);
+        count++;
+
+        if (len > 40000) over40k++;
+        if (len > 100000) over100k++;
+        channels[ch]++;
+}
+
+END {
+        if (count > 0) {
+                meanQ = -10 * log(qsum / count) / log(10);
+                printf "Mean read quality (all reads): %.1f\n", meanQ;
+        }
+
+        printf "Number of reads (all reads) > 40kb: %d reads\n", over40k;
+        printf "Number of reads (all reads) > 100kb: %d reads\n", over100k;
+        printf "Active channels (all reads): %d\n", length(channels);
+}
+' "${submission_folder}/summaries/sequencing_summary_${run_name}.all.txt" >> "$log"
+
+# number of reads > 40kb and > 100kb and number of active channels for pass reads
+awk -F'\t' '
+NR==1 {
+        for (i=1; i<=NF; i++) {
+                if ($i=="mean_qscore_template") qcol=i;
+                if ($i=="sequence_length_template") lencol=i;
+                if ($i=="channel") chcol=i;
+        }
+
+        if (!qcol || !lencol || !chcol) {
+                print "Error: required column not found in header." > "/dev/stderr";
+                exit 1;
+        }
+        next
+}
+
+{
+        q = $qcol;
+        len = $lencol;
+        ch = $chcol;
+
+        qsum += 10^(-q/10);
+        count++;
+
+        if (len > 40000) over40k++;
+        if (len > 100000) over100k++;
+        channels[ch]++;
+}
+
+END {
+        if (count > 0) {
+                meanQ = -10 * log(qsum / count) / log(10);
+                printf "Mean read quality (pass reads): %.1f\n", meanQ;
+        }
+
+        printf "Number of reads (pass reads) > 40kb: %d reads\n", over40k;
+        printf "Number of reads (pass reads) > 100kb: %d reads\n", over100k;
+        printf "Active channels (pass reads): %d\n", length(channels);
+}
+' "${submission_folder}/summaries/sequencing_summary_${run_name}.pass.txt" >> "$log"
 
 ############## CLEAN FILES AND END LOG FILE ##############
 
