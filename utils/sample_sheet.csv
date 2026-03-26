@@ -1,0 +1,5 @@
+experiment_id,kit,position_id,barcode,alias
+p2sid0028,SQK-NBD114-24,A,barcode01,sample1
+p2sid0028,SQK-NBD114-24,A,barcode02,sample2
+p2sid0028,SQK-NBD114-24,A,barcode03,sample3
+p2sid0028,SQK-NBD114-24,A,barcode04,sample4

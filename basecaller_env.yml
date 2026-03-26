@@ -1,0 +1,21 @@
+name: basecaller
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.12
+  - samtools
+  - minimap2
+  - jq
+  - cutadapt
+  - medaka
+  - ont-modkit
+  - bedtools
+  - nanoplot
+  - nanoqc
+  - pigz
+  - pip
+  - pip:
+    - pod5
+    - sequali

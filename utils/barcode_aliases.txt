@@ -1,0 +1,4 @@
+barcode03;hek293
+barcode01;sample_name1
+barcode02;sample_name2
+barcode04;HeLa
