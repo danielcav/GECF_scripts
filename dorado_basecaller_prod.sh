@@ -289,6 +289,25 @@ else
 	model_stereo="${models_stereo_array[0]}"
 fi
 
+while true; do
+	read -ep "Multiplexing mode (barcoded reads)? (y/n):" ans_barcoded
+        case "$ans_barcoded" in
+                [Nn])
+                        echo "Got it! Reads are not barcoded."
+                        is_barcoded=0
+			break
+                        ;;
+                [Yy])
+			echo "Got it! Reads are barcoded and require demultiplexing."
+			is_barcoded=1
+                        break
+                        ;;
+                *)
+                        echo "Please enter y or n."
+                        ;;
+        esac
+done
+
 # detect sequencing kit from pod5 metadata
 # IDEA: pod5 file metadata can be used to output non trimmed raw files for duplex and either directly do the demultiplexing using the basecaller for simplex reads
 # or format files so they are ready-to-use for the demux.sh script. Additionally, don't create a submission for multiplexed reads in this script (do it in demux.sh).
@@ -301,8 +320,8 @@ kit_name=$(pod5 inspect debug "$first_pod5_file" | \
 
 # this should give us '1' for barcoded or '0' for non-barcode
 #is_barcoded=1
-is_barcoded=$(pod5 inspect debug "$first_pod5_file" | \
-              grep -o "'barcoding_enabled': *'[^']*'" | sed -E "s/.*'([^']+)'$/\1/")
+#is_barcoded=$(pod5 inspect debug "$first_pod5_file" | \
+#              grep -o "'barcoding_enabled': *'[^']*'" | sed -E "s/.*'([^']+)'$/\1/")
 
 if [[ -z "${kit_name:-}" ]]; then
 	read -ep "The program was not able to detect the sequencing kit. Please enter a sequencing kit name (e.g. SQK-LSK114): " kit_name
