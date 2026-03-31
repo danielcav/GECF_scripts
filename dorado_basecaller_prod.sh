@@ -598,16 +598,12 @@ NR==1 {
 | awk '
 {
 	scores[NR] = $1
-	sum += $1
 }
 END {
 	if (NR == 0) {
-        	print "Mean read quality (all reads): NA" >> "'"$log"'";
         	print "Median read quality (all reads): NA" >> "'"$log"'";
 		exit
 	}
-
-	mean = sum / NR
 
 	if (NR % 2 == 1) {
         	median = scores[(NR + 1) / 2]
@@ -615,7 +611,6 @@ END {
 		median = (scores[NR / 2] + scores[NR / 2 + 1]) / 2
 	}
 
-	printf "Mean read quality (all reads): %.2f\n", mean >> "'"$log"'"
 	printf "Median read quality (all reads): %.2f\n", median >> "'"$log"'"
 }'
 
@@ -638,16 +633,12 @@ NR==1 {
 | awk '
 {
         scores[NR] = $1
-        sum += $1
 }
 END {
         if (NR == 0) {
-                print "Mean read quality (pass reads): NA" >> "'"$log"'";
                 print "Median read quality (pass reads): NA" >> "'"$log"'";
                 exit
         }
-
-        mean = sum / NR
 
         if (NR % 2 == 1) {
                 median = scores[(NR + 1) / 2]
@@ -655,7 +646,6 @@ END {
                 median = (scores[NR / 2] + scores[NR / 2 + 1]) / 2
         }
 
-        printf "Mean read quality (pass reads): %.2f\n", mean >> "'"$log"'"
         printf "Median read quality (pass reads): %.2f\n", median >> "'"$log"'"
 }'
 
