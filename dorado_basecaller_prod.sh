@@ -565,6 +565,11 @@ sequali "$temp_all_reads" \
 	--html "${run_name}_all.html" \
 	--outdir "${submission_folder}/QC_outputs/${run_name}_all_reads"
 
+# checksums for fastq and bam files
+# cd to avoid exposing all path from this server and only show path starting from submission folder
+cd "${submission_folder}"
+md5sum "fastq_files"/* "ubam_files"/* > "checksums_${run_name}.txt"
+cd -
 ############## SUMMARY FILE STATISTICS ##############
 
 echo ">>>>>>>>>>> STATS & METRICS <<<<<<<<<<<" >> "$log"
