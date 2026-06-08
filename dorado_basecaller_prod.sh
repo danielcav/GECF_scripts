@@ -21,6 +21,7 @@ declare -a dependencies_list=(
 	"samtools"
 	"dorado"
 #	"NanoPlot"
+#	"md5sum"
 	"pigz"
 	"pod5"
 	"sequali"
@@ -519,7 +520,7 @@ else
                 echo "" | tee -a "$log"
                 echo ">>>>>>>> BASECALLED POD5 FILES <<<<<<<<" >> "$log"
                 echo "" >> "$log"
-                find "$pod5_directory" -type f -name "*.pod5" -exec basename {} \; >> "$log"
+                find "$pod5_directory" \( -type f -o -type l \) -name "*.pod5" -exec basename {} \; >> "$log"
                 {
                   echo ""
                   echo "╔═══════════════════════════════════════╗"
