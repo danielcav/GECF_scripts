@@ -77,82 +77,132 @@ cat <<'EOF'
 +----------------+-------------------+-------------+-----------+---------+
 | experiment_id  | kit               | position_id | barcode   | alias   |
 +----------------+-------------------+-------------+-----------+---------+
-| p2sid00xx      | SQK-NBD114-24     | A           | barcode01 | sample1 |
-| p2sid00xx      | SQK-NBD114-24     | A           | barcode02 | sample2 |
-| p2sid00xx      | SQK-NBD114-24     | A           | barcode03 | sample3 |
-| p2sid00xx      | SQK-NBD114-24     | A           | barcode04 | sample4 |
+| SOL00xx        | SQK-NBD114-24     | P2S-00697-A | barcode01 | sample1 |
+| SOL00xx        | SQK-NBD114-24     | P2S-00697-A | barcode02 | sample2 |
+| SOL00xx        | SQK-NBD114-24     | P2S-00697-A | barcode03 | sample3 |
+| SOL00xx        | SQK-NBD114-24     | P2S-00697-A | barcode04 | sample4 |
 +----------------+-------------------+-------------+-----------+---------+
 EOF
 
-# you can change '-i "p2sid00"' with whatever you want it to pre-fill the user field
-read -e -i "p2sid00" -p "Please specify an experiment name (e.g. p2sid00xx): " run_name
+kit_name=""
+experiment_name=""
+position_id=""
 
 while true; do
-        read -ep "Auto detect the barcoding kit ? (y/n): " ans_auto
-        case "$ans_auto" in
-                [Nn])
-                        read -ep "Enter the name of the barcode kit (e.g., SQK-NBD114-24): " kit_name
-                        break
-                        ;;
-                [Yy])
-                        while true; do
-                                # Can improve this part so the user directly gives a pod5 file instead of a directory.
-                                read -ep "Enter the pod5 directory path: " input_path
-                                pod5_directory=$(realpath -e "${input_path/#\~/$HOME}" 2>/dev/null || true)
+	read -ep "Auto-detect run metadata from a POD5 file/folder? (y/n): " ans_auto
+	case "$ans_auto" in
+		[Nn])
+			# manual inputs
+			read -ep "Enter the name of the sequencing kit (e.g., SQK-NBD114-24): " kit_name
+			# you can change '-i "SOL00"' with whatever you want it to pre-fill the user field
+			read -e -i "SOL00" -p "Enter the experiment name (e.g., SOL0012): " experiment_name
 
-                                if [[ -n "$pod5_directory" ]] && [[ -d "$pod5_directory" ]]; then
-                                        pod5_file=$(find "$pod5_directory" -type f -name "*.pod5" | head -n 1)
-                                        if [[ -z "${pod5_file:-}" ]]; then
-                                                echo "Directory exists but does not contain any .pod5 files. Please provide another directory path."
-                                        else
-                                                echo "Directory exists and contains pod5 files: $pod5_directory"
-                                                echo "Detecting barcoding kit..."
-                                                kit_name=$(pod5 inspect debug "$pod5_file" | \
-                                                        grep "barcoding_kits" | \
-                                                        sed "s/.*barcoding_kits': '\([^']*\)'.*/\1/" | \
-                                                        awk '{print toupper($1)}')
-                                                if [[ -z "${kit_name:-}" ]]; then
-                                                        read -ep "The program was not able to detect the sequencing kit. Please enter a sequencing kit name (e.g. SQK-NBD114-24): " kit_name
-                                                else
-                                                        echo "Detected kit: $kit_name"
-                                                fi
-                                                break
-                                        fi
-                                else
-                                        echo "Directory does not exist. Please try again."
-                                fi
-                        done
-                        break
-                        ;;
-                *)
-                        echo "Please enter y or n."
-                        ;;
-        esac
+			PS3="Select a position ID corresponding to the FC position on the P2Solo: "
+			select pos in A B; do
+				if [[ -n "$pos" ]]; then
+					position_id="P2S-00697-$pos"
+					break
+				else
+					echo "Invalid selection. Try again."
+				fi
+			done
+			break
+			;;
+
+		[Yy])
+			while true; do
+				read -ep "Enter the POD5 file path or directory path: " input_path
+
+				resolved_path=$(realpath -e "${input_path/#\~/$HOME}" 2>/dev/null || true)
+
+				if [[ -n "$resolved_path" ]]; then
+					if [[ -f "$resolved_path" && "$resolved_path" == *.pod5 ]]; then
+						pod5_file="$resolved_path"
+					elif [[ -d "$resolved_path" ]]; then
+						pod5_file=$(find "$resolved_path" \( -type f -o -type l \) -name "*.pod5" | head -n 1)
+					else
+						pod5_file=""
+					fi
+
+					if [[ -z "$pod5_file" ]]; then
+						echo "No valid .pod5 files found at that target. Please try again."
+					else
+						echo "Using file for detection: $pod5_file"
+						echo "Parsing metadata..."
+
+						# we cache the inspect output to avoid running it multiple times
+						inspect_output=$(pod5 inspect debug "$pod5_file" 2>/dev/null)
+
+						# extract values
+						kit_name=$(echo "$inspect_output" | grep -E "sequencing_kit:" | head -n 1 | awk '{print toupper($2)}')
+						experiment_name=$(echo "$inspect_output" | grep -E "experiment_name:" | head -n 1 | awk '{print $2}')
+						position_id=$(echo "$inspect_output" | grep -E "sequencer_position:" | head -n 1 | awk '{print $2}')
+
+						# fallback checks for empty variables
+
+						# kit name fallback
+						if [[ -z "$kit_name" ]]; then
+							read -ep "Could not autodetect kit. Please enter kit name: " kit_name
+						else
+							echo "Detected kit: $kit_name"
+						fi
+
+						# exp name fallback
+						if [[ -z "$experiment_name" ]]; then
+							read -e -i "SOL00" -p "Could not autodetect experiment name. Please enter it (e.g., SOL0012): " experiment_name
+						else
+							echo "Detected experiment: $experiment_name"
+						fi
+
+						# flow cell position fallback
+						if [[ -z "$position_id" ]]; then
+							echo "Could not autodetect sequencer position."
+							PS3="Select a position ID corresponding to the FC position on the P2Solo: "
+							select pos in A B; do
+								if [[ -n "$pos" ]]; then
+									position_id="P2S-00697-$pos"
+									break
+								else
+									echo "Invalid selection. Try again."
+								fi
+							done
+						else
+							echo "Detected sequencer position: $position_id"
+						fi
+
+						break 2 # break out of both loops since we have our answers
+					fi
+				else
+					echo "Path does not exist. Please try again."
+				fi
+			done
+			;;
+		*)
+			echo "Please enter y or n."
+			;;
+	esac
 done
 
-
-PS3="Select a position ID corresponding to the FC position on the P2Solo: "
-select position_id in A B; do
-        if [[ -n "$position_id" ]]; then
-                echo "Position selected: $position_id"
-                break
-        else
-                echo "Invalid selection. Try again."
-        fi
-done
+echo "---------------------------------------"
+echo "Configuration Ready:"
+echo "Kit Name:            $kit_name"
+echo "Experiment Name:     $experiment_name"
+echo "Sequencer Position:  $position_id"
+echo "---------------------------------------"
 
 # get current directory to sacve sample sheet
 current_directory="$(pwd)"
 
 sort -t';' -k1,1 "$user_sample_sheet" | \
 awk -F';' -v OFS=',' \
-    -v run_name="$run_name" -v kit_name="$kit_name" -v position_id="$position_id" \
+    -v experiment_name="$experiment_name" -v kit_name="$kit_name" -v position_id="$position_id" \
     'BEGIN { print "experiment_id,kit,position_id,barcode,alias" }
-     { print run_name, kit_name, position_id, $1, $2 }' > "${current_directory}/sample_sheet_${run_name}.csv"
+     { print experiment_name, kit_name, position_id, $1, $2 }' > "${current_directory}/sample_sheet_${experiment_name}.csv"
 
+echo "Saved to: ${current_directory}/sample_sheet_${experiment_name}.csv"
 echo "Sample sheet formatted and ready to use: "
 echo ""
-cat "${current_directory}/sample_sheet_${run_name}.csv"
+cat "${current_directory}/sample_sheet_${experiment_name}.csv"
 echo ""
 echo "----------------- END OF SCRIPT -----------------"
 
