@@ -8,6 +8,19 @@ on_exit () {
 
 trap 'on_exit $LINENO' ERR
 
+# --- Helper function ---
+usage() {
+	echo "Usage: $0 [-o output_log_file] <your_file.ubam>"
+	echo ""
+	echo "Arguments:"
+	echo "  <your_file.ubam>       Input uBAM file to process"
+	echo ""
+	echo "Options:"
+	echo "  -o output_log_file     Optional: save stats to a log file"
+	echo "  -h                     Show this help message"
+	exit 0
+}
+
 ########################################## CHECK DEPENDENCIES ###########################################
 
 # Check if conda environment is activated
@@ -24,17 +37,24 @@ fi
 
 #########################################################################################################
 
-INPUT_FILE="$1"
-LOG_FILE="${2:-"ubam_sequencing_stats.log"}"
+LOG_FILE=""
+while getopts "o:h" opt; do
+	case $opt in
+		o) LOG_FILE="$OPTARG" ;;
+        	h) usage ;;
+        	*) usage ;;
+	esac
+done
+shift $((OPTIND - 1))
 
+INPUT_FILE="$1"
 if [ -z "$INPUT_FILE" ] || [ ! -f "$INPUT_FILE" ]; then
-	echo "Usage: $0 <your_file.ubam> [output_log_file]" >&2
-	exit 1
+	echo "Usage: $0 [-o output_log_file] <your_file.ubam>" >&2
+        exit 1
 fi
 
 echo "Processing uBAM file: $INPUT_FILE"
 echo "Extracting BAM tags (qs, ch)..."
-echo "=========================================="
 
 # Extract read sequence length, mean Q-score tag (qs:f), and channel tag (ch:i)
 # This bypasses character-by-character calculation, speeding processing.
@@ -58,61 +78,107 @@ echo "Done!"
 echo "Generating stats..."
 
 # --- Metric Calculation Pass ---
-eval "$STREAM_CMD" | sort -k1,1n | awk -F'\t' -v logfile="$LOG_FILE" '
-{
-	lens[NR] = $1
-	qs[NR] = $2
-	total_bases += $1
-	q_sum += 10^(-$2/10)
+if [ -n "$LOG_FILE" ]; then
+	eval "$STREAM_CMD" | sort -k1,1n | awk -F'\t' -v logfile="$LOG_FILE" '
+	{
+		lens[NR] = $1
+		qs[NR] = $2
+		total_bases += $1
+		q_sum += 10^(-$2/10)
 
-	if ($1 > 40000) over40k++
-	if ($1 > 100000) over100k++
-	channels[$3]++
-}
-END {
-	if (NR == 0) {
-		print "Error: No valid sequencing reads parsed from uBAM." > "/dev/stderr"
-        	exit 1
+		if ($1 > 40000) over40k++
+		if ($1 > 100000) over100k++
+		channels[$3]++
 	}
+	END {
+		if (NR == 0) {
+			print "Error: No valid sequencing reads parsed from uBAM." > "/dev/stderr"
+	        	exit 1
+		}
 
-	# Calculate Medians
-	if (NR % 2 == 1) {
-		med_len = lens[(NR+1)/2]; med_q = qs[(NR+1)/2]
-    	} else {
-        	med_len = (lens[NR/2] + lens[(NR/2)+1]) / 2; med_q = (qs[NR/2] + qs[(NR/2)+1]) / 2
-    	}
+		# Calculate Medians
+		if (NR % 2 == 1) {
+			med_len = lens[(NR+1)/2]; med_q = qs[(NR+1)/2]
+	    	} else {
+	        	med_len = (lens[NR/2] + lens[(NR/2)+1]) / 2; med_q = (qs[NR/2] + qs[(NR/2)+1]) / 2
+	    	}
 
-	mean_len = total_bases / NR
-	mean_q = -10 * log(q_sum / NR) / log(10)
+		mean_len = total_bases / NR
+		mean_q = -10 * log(q_sum / NR) / log(10)
 
-	# Compute N50
-	half_bases = total_bases / 2; running_sum = 0; n50 = 0
-	for (i = NR; i >= 1; i--) {
-        running_sum += lens[i]
-        if (running_sum >= half_bases) { n50 = lens[i]; break; }
+		# Compute N50
+		half_bases = total_bases / 2; running_sum = 0; n50 = 0
+		for (i = NR; i >= 1; i--) {
+	        running_sum += lens[i]
+	        if (running_sum >= half_bases) { n50 = lens[i]; break; }
+		}
+
+		# Write out report
+		print "--- uBAM Sequencing Production Statistics ---" >> logfile
+		printf "Number of reads	        : %d reads\n", NR >> logfile
+		printf "Total yield             : %.2f Gb\n", total_bases / 1e9 >> logfile
+		printf "Mean read length        : %.1f bases\n", mean_len >> logfile
+		printf "Median read length      : %d bases\n", med_len >> logfile
+		printf "Read length N50         : %d bases\n", n50 >> logfile
+		printf "Mean read quality       : %.1f Q\n", mean_q >> logfile
+		printf "Median read quality     : %.2f Q\n", med_q >> logfile
+		printf "Reads greater than 40kb : %d\n", over40k >> logfile
+		printf "Reads greater than 100kb: %d\n", over100k >> logfile
+		printf "Active system channels  : %d\n", length(channels) >> logfile
+
+		printf "\nTop 5 longest reads <length (qscore)>:\n" >> logfile
+		idx = 0
+		for (i = NR; (i > 0 && idx < 5); i--) {
+	        printf "%d bases\t(%.2f Q)\n", lens[i], qs[i] >> logfile
+	        idx++
+	    }
+		print "--------------------------------------------\n" >> logfile
+	}' | tee -a "$LOG_FILE"
+else
+	eval "$STREAM_CMD" | sort -k1,1n | awk -F'\t' '
+    	{
+		lens[NR] = $1
+		qs[NR] = $2
+		total_bases += $1
+		q_sum += 10^(-$2/10)
+		if ($1 > 40000) over40k++
+		if ($1 > 100000) over100k++
+		channels[$3]++
 	}
-
-	# Write out report
-	print "--- uBAM Sequencing Production Statistics ---" >> logfile
-	printf "Total parsed reads      : %d reads\n", NR >> logfile
-	printf "Total yield             : %.2f Gb\n", total_bases / 1e9 >> logfile
-	printf "Mean read length        : %.1f bases\n", mean_len >> logfile
-	printf "Median read length      : %d bases\n", med_len >> logfile
-	printf "Read length N50         : %d bases\n", n50 >> logfile
-	printf "Mean read quality       : %.1f Q\n", mean_q >> logfile
-	printf "Median read quality     : %.2f Q\n", med_q >> logfile
-	printf "Reads greater than 40kb : %d\n", over40k >> logfile
-	printf "Reads greater than 100kb: %d\n", over100k >> logfile
-	printf "Active system channels  : %d\n", length(channels) >> logfile
-
-	printf "\nTop 5 longest reads <length (qscore)>:\n" >> logfile
-	idx = 0
-	for (i = NR; (i > 0 && idx < 5); i--) {
-        printf "%d bases\t(%.2f Q)\n", lens[i], qs[i] >> logfile
-        idx++
-    }
-	print "--------------------------------------------\n" >> logfile
-}'
-
-echo "Processing complete! Metrics written to $LOG_FILE"
-cat "$LOG_FILE"
+	END {
+		if (NR == 0) {
+			print "Error: No valid sequencing reads parsed from uBAM." > "/dev/stderr"
+			exit 1
+            	}
+            	if (NR % 2 == 1) {
+			med_len = lens[(NR+1)/2]; med_q = qs[(NR+1)/2]
+		} else {
+			med_len = (lens[NR/2] + lens[(NR/2)+1]) / 2; med_q = (qs[NR/2] + qs[(NR/2)+1]) / 2
+            	}
+		mean_len = total_bases / NR
+		mean_q = -10 * log(q_sum / NR) / log(10)
+		half_bases = total_bases / 2; running_sum = 0; n50 = 0
+		for (i = NR; i >= 1; i--) {
+			running_sum += lens[i]
+			if (running_sum >= half_bases) { n50 = lens[i]; break; }
+            	}
+		print "--- uBAM Sequencing Production Statistics ---"
+		printf "Total parsed reads      : %d reads\n", NR
+		printf "Total yield             : %.2f Gb\n", total_bases / 1e9
+		printf "Mean read length        : %.1f bases\n", mean_len
+		printf "Median read length      : %d bases\n", med_len
+		printf "Read length N50         : %d bases\n", n50
+		printf "Mean read quality       : %.1f Q\n", mean_q
+		printf "Median read quality     : %.2f Q\n", med_q
+		printf "Reads greater than 40kb : %d\n", over40k
+		printf "Reads greater than 100kb: %d\n", over100k
+		printf "Active system channels  : %d\n", length(channels)
+		printf "\nTop 5 longest reads <length (qscore)>:\n"
+		idx = 0
+		for (i = NR; (i > 0 && idx < 5); i--) {
+			printf "%d bases\t(%.2f Q)\n", lens[i], qs[i]
+			idx++
+            	}
+            	print "--------------------------------------------"
+    }'
+fi
