@@ -14,7 +14,7 @@ fi
 declare -a dependencies_list=(
         "samtools"
         "dorado"
-        "NanoPlot"
+#       "NanoPlot"
         "pigz"
         "pod5"
         "sequali"
@@ -70,6 +70,13 @@ fi
 echo ""
 
 ##########################################################################################################################
+
+# check if stats-generating file is here
+if [ ! -f "$(dirname "$0")/get_stats.sh" ]; then
+    echo "Error: get_stats.sh not found in $(dirname "$0")" >&2
+    exit 1
+fi
+
 #################################################### HELPER DOCUMENTATION FUNCTION #######################################
 
 usage() {
@@ -108,8 +115,8 @@ qscore=10
 both_ends=false
 
 if [[ $# -eq 0 ]]; then
-  usage
-  exit 1
+	usage
+	exit 1
 fi
 
 while [[ "$#" -gt 0 ]]; do
@@ -189,7 +196,8 @@ else
 fi
 
 root_path_temp=$(realpath -e "$input_file" | xargs dirname)
-root_path="${root_path_temp}/demultiplexed_data"
+run_name=$(tail -n +2 "$sample_sheet" | awk -F ',' '{print $1}'| sort -u)
+root_path="${root_path_temp}/demultiplexed_data_${run_name}"
 
 # this part will check if a demultiplexed data folder already exists
 # and if so it will just create a demultiplexed_data_2 to avoid overwriting the existing one
@@ -203,7 +211,6 @@ fi
 
 file=$(basename "$input_file")
 filename="${file%.bam}"
-run_name=$(tail -n +2 "$sample_sheet" | awk -F ',' '{print $1}'| sort -u)
 kit_name=$(tail -n +2 "$sample_sheet" | awk -F ',' '{print $2}' | sort -u)
 
 ##########################################################################################################################
@@ -350,12 +357,12 @@ find "${root_path}/ubam_files" -name "*.bam" | while read -r f; do
 	# depending on how ONT will change their file namings, this might not work in the future.
 	newbase="${parent_dir}.bam"
 
-	echo "Flattening: $parent_dir -> $newbase" | tee -a "$log"
+	echo "Flattening: $(basename "$f") -> $newbase" | tee -a "$log"
 	mv "$f" "${root_path}/ubam_files/$newbase"
 done
 
 # Clean up empty Dorado-created directories
-#find "${root_path}/ubam_files" -maxdepth 10 -type d -empty -delete
+find "${root_path}/ubam_files" -maxdepth 10 -type d -empty -delete
 
 # formatting log file (remove progress lines created by demux function)
 tmpfile=$(mktemp) && tr -d '\r' < "$log" | sed -E '/Processed [0-9]+ reads/ d; s/> Output records written: [0-9]+//g' > "$tmpfile" && mv "$tmpfile" "$log"
@@ -662,7 +669,7 @@ else
 		[[ -d "$simplex_bam" ]] && continue
 
 		barcode=$(basename "$simplex_bam" .bam)
-                output_bam="${root_path}/ubam_files/${run_name}_${barcode}/${barcode}_final.bam" # change final when we are sure everything is ok
+                output_bam="${root_path}/ubam_files/${run_name}_${barcode}/${barcode}.bam"
 
                 mkdir -p "${root_path}/fastq_files/${run_name}_${barcode}"
                 mkdir -p "${root_path}/ubam_files/${run_name}_${barcode}"
@@ -755,7 +762,17 @@ done <<< "$all_summaries" > "${root_path}/summaries/all/${run_name}_all_reads_se
 echo "Done" | tee -a "$log"
 
 mapfile -t all_bams < <(find "${root_path}/ubam_files" -type f -name "*.bam")
+if [[ ${#all_bams[@]} -eq 0 ]]; then
+    echo "Error: No BAM files found in ubam_files." >&2
+    exit 1
+fi
+
 mapfile -t pass_bams < <(find "${root_path}/ubam_files" -type f -name "*.pass.bam")
+if [[ ${#pass_bams[@]} -eq 0 ]]; then
+    echo "Error: No pass BAM files found in ubam_files." >&2
+    exit 1
+fi
+
 temp_pass_bam="${root_path}/temp/all_pass_reads.bam"
 temp_all_bam="${root_path}/temp/all_reads.bam"
 samtools cat "${all_bams[@]}" -o "$temp_all_bam"
@@ -806,57 +823,15 @@ echo ">>>>>>>>>> STATISTICS <<<<<<<<<<" | tee -a "$log"
 echo "" | tee -a "$log"
 
 if [[ $simplex_only == false ]]; then
-        duplex_read_count=$(samtools view -c -@ "$cores" "${root_path}/temp/duplex_tagged.bam")
-	classified_read_count=$(samtools view -c -@ "$cores" -e '[BC]!="unclassified"' "${root_path}/temp/duplex_tagged.bam")
+	duplex_read_count=$(samtools view -c -@ "$cores" "${root_path}/temp/duplex_tagged.bam")
+        classified_read_count=$(samtools view -c -@ "$cores" -e '[BC]!="unclassified"' "${root_path}/temp/duplex_tagged.bam")
         percent_classified_duplex=$(( 100 * classified_read_count/duplex_read_count ))
         echo "${percent_classified_duplex}% of ${duplex_read_count} duplex reads are classified." | tee -a "$log"
-
         false_duplex=$(wc -l < "${root_path}/temp/all_unique_false_positive_duplex_ids.txt")
         echo "$false_duplex false positive duplex reads detected and removed. ${n_parent_reads} duplex parent reads reintroduced as simplex reads." | tee -a "$log"
 fi
 
-samtools view -@ "$cores" -c "$temp_all_bam" | awk '{printf "Total number of reads: %.2f M reads\n", $1/1e6}' >> "$log"
-
-echo "" >> "$log"
-stat_40kb_reads=$(tail -n +2 "${root_path}/summaries/all/${run_name}_all_reads_sequencing_summary.txt" | awk '{if ($10 > 40000) print}' | wc -l)
-echo "Number of reads > 40kb: ${stat_40kb_reads} reads" >> "$log"
-stat_100kb_reads=$(tail -n +2 "${root_path}/summaries/all/${run_name}_all_reads_sequencing_summary.txt" | awk '{if ($10 > 100000) print}' | wc -l)
-echo "Number of reads > 100kb: ${stat_100kb_reads} reads" >> "$log"
-
-# compute number of active channels
-active_channels=$(tail -n +2 "${root_path}/summaries/all/${run_name}_all_reads_sequencing_summary.txt" | awk '{print $4}' | sort -u | wc -l)
-echo "Active channels: ${active_channels}" >> "$log"
-
-# total number of bases
-jq '.summary["total_bases"]' "${root_path}/QC_reports/${run_name}_all_reads/sequali_all/${run_name}_all_reads.json" | awk '{printf "Total bases: %.2f Gb\n", $1/1e9}' >> "$log"
-
-# mean read length
-jq '.summary["mean_length"]' "${root_path}/QC_reports/${run_name}_all_reads/sequali_all/${run_name}_all_reads.json" | awk '{printf "Mean read length: %.1f bases\n", $1}' >> "$log"
-
-# mean quality score
-tail -n +2 "${root_path}/summaries/all/${run_name}_all_reads_sequencing_summary.txt" | \
-        awk '{ sum += 10^(-$11/10); count++ } END { if (count > 0) printf "Mean read quality: %.1f\n", -10 * log(sum / count) / log(10) }' >> "$log"
-
-# median read length
-jq '.sequence_length_distribution["q50"]' "${root_path}/QC_reports/${run_name}_all_reads/sequali_all/${run_name}_all_reads.json" | awk '{printf "Median read length: %.0f bases\n", $1}' >> "$log"
-
-# median quality score
-tail -n +2 "${root_path}/summaries/all/${run_name}_all_reads_sequencing_summary.txt" | \
-    awk '{ print $11 }' | \
-    sort -n | \
-    awk '{
-        count[NR] = $1
-    }
-    END {
-        if (NR % 2 == 1) {
-            printf "Median read quality: %.1f\n", count[(NR + 1) / 2]
-        } else {
-            printf "Median read quality: %.1f\n", (count[NR / 2] + count[NR / 2 + 1]) / 2
-        }
-    }' >> "$log"
-
-# read length N50
-jq '.sequence_length_distribution["n50"]' "${root_path}/QC_reports/${run_name}_all_reads/sequali_all/${run_name}_all_reads.json" | awk '{printf "Read length N50: %.0f bases\n", $1}' >> "$log"
+bash "$(dirname "$0")/get_stats.sh" "$temp_all_bam" | tee -a "$log"
 
 ############################################################################
 #                               CLEANING                                   #
