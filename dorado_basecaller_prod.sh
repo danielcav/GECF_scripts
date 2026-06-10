@@ -135,6 +135,26 @@ done
 project_root_path=$(dirname "$pod5_directory")
 submission_folder="${project_root_path}/SUP_basecalling_${run_name}"
 
+
+echo "Checking available disk space..."
+pod5_size=$(du -sb "$pod5_directory" | awk '{print $1}')
+required_space=$(awk "BEGIN {printf \"%d\", $pod5_size * 0.20}") # based on linear regression
+output_disk=$(df -B1 "$project_root_path" | awk 'NR==2 {print $4}')
+
+if (( output_disk < required_space )); then
+	required_gb=$(awk "BEGIN {printf \"%.1f\", $required_space / 1e9}")
+	available_gb=$(awk "BEGIN {printf \"%.1f\", $output_disk / 1e9}")
+	echo "Error: not enough disk space on output partition." >&2
+	echo "  Required : ${required_gb} Gb" >&2
+	echo "  Available: ${available_gb} Gb" >&2
+	exit 1
+else
+	available_gb=$(awk "BEGIN {printf \"%.1f\", $output_disk / 1e9}")
+	required_gb=$(awk "BEGIN {printf \"%.1f\", $required_space / 1e9}")
+	echo "Disk space OK — required: ${required_gb} Gb, available: ${available_gb} Gb"
+fi
+
+
 # if the submission folder already exists, create a new one to avoid conflicts
 if [[ -d "$submission_folder" ]]; then
         i=2
