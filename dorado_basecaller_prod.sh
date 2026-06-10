@@ -76,6 +76,13 @@ else
 fi
 
 #########################################################################################################
+
+# check if get_stats script is in the same folder as this script
+if [ ! -f "$(dirname "$0")/get_stats.sh" ]; then
+    echo "Error: get_stats.sh not found in $(dirname "$0")" >&2
+    exit 1
+fi
+
 ############################################## MAIN SCRIPT ##############################################
 
 #>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> USER PROMPT <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -573,244 +580,17 @@ md5sum "fastq_files"/* "ubam_files"/* > "checksums_${run_name}.txt"
 cd -
 ############## SUMMARY FILE STATISTICS ##############
 
-echo ">>>>>>>>>>> STATS & METRICS <<<<<<<<<<<" >> "$log"
-echo "" >> "$log"
-
-# number of all reads
-jq '.summary["total_reads"]' "${submission_folder}/QC_outputs/${run_name}_all_reads/${run_name}_all.json" | awk '{printf "Total number of reads: %.2f M\n", $1/1e6}' >> "$log"
-
-# number of pass reads
-jq '.summary["total_reads"]' "${submission_folder}/QC_outputs/${run_name}_pass_reads/${run_name}.pass.json" | awk '{printf "Total pass reads: %.2f M\n", $1/1e6}' >> "$log"
-
-# number of fail reads
-samtools view -c -@ "$cores" "${ubam_folder}/${run_name}.fail.bam" | awk '{printf "Total fail reads: %.2f M\n", $1/1e6}' >> "$log"
-
-# mean and median qscore for all reads
-awk -F'\t' '
-NR==1 {
-	for (i=1; i<=NF; i++) {
-		if ($i=="mean_qscore_template") qcol=i;
-    	}
-    	if (!qcol) {
-        	print "Error: mean_qscore_template column not found." >> "'"$log"'";
-		exit 1;
-	}
-	next
-}
-{
-	print $qcol
-}
-' "${submission_folder}/summaries/sequencing_summary_${run_name}.all.txt" | sort -n \
-| awk '
-{
-	scores[NR] = $1
-}
-END {
-	if (NR == 0) {
-        	print "Median read quality (all reads): NA" >> "'"$log"'";
-		exit
-	}
-
-	if (NR % 2 == 1) {
-        	median = scores[(NR + 1) / 2]
-	} else {
-		median = (scores[NR / 2] + scores[NR / 2 + 1]) / 2
-	}
-
-	printf "Median read quality (all reads): %.2f\n", median >> "'"$log"'"
-}'
-
-# mean and median qscore for pass reads
-awk -F'\t' '
-NR==1 {
-        for (i=1; i<=NF; i++) {
-                if ($i=="mean_qscore_template") qcol=i;
-        }
-        if (!qcol) {
-                print "Error: mean_qscore_template column not found." >> "'"$log"'";
-                exit 1;
-        }
-        next
-}
-{
-        print $qcol
-}
-' "${submission_folder}/summaries/sequencing_summary_${run_name}.pass.txt" | sort -n \
-| awk '
-{
-        scores[NR] = $1
-}
-END {
-        if (NR == 0) {
-                print "Median read quality (pass reads): NA" >> "'"$log"'";
-                exit
-        }
-
-        if (NR % 2 == 1) {
-                median = scores[(NR + 1) / 2]
-        } else {
-                median = (scores[NR / 2] + scores[NR / 2 + 1]) / 2
-        }
-
-        printf "Median read quality (pass reads): %.2f\n", median >> "'"$log"'"
-}'
-
-# total number of bases, mean and median read length, and N50 for all reads
-jq -r '.summary as $s | .sequence_length_distribution as $d |
-	[$s.total_bases, $s.mean_length, $d.n50, $d.q50] | @tsv' \
-	"${submission_folder}/QC_outputs/${run_name}_all_reads/${run_name}_all.json" |
-awk -F'\t' '{
-	printf "Total bases (all reads): %.2f Gb\n", $1/1e9
-	printf "Mean read length (all reads): %.1f bases\n", $2
-	printf "Read length N50 (all reads): %.0f bases\n", $3
-	printf "Median read length (all reads): %.0f bases\n", $4
-}' >> "$log"
-
-# total number of bases, mean and median read length, and N50 for pass reads
-jq -r '.summary as $s | .sequence_length_distribution as $d |
-        [$s.total_bases, $s.mean_length, $d.n50, $d.q50] | @tsv' \
-        "${submission_folder}/QC_outputs/${run_name}_pass_reads/${run_name}.pass.json" |
-awk -F'\t' '{
-        printf "Total bases (pass reads): %.2f Gb\n", $1/1e9
-        printf "Mean read length (pass reads): %.1f bases\n", $2
-        printf "Read length N50 (pass reads): %.0f bases\n", $3
-        printf "Median read length (pass reads): %.0f bases\n", $4
-}' >> "$log"
-
-# print 5 longest reads with their associated qscores for all reads
-echo "Top 5 longest reads formated as <length (qscore)>" >> "$log"
-echo "All reads:" >> "$log"
-awk -F'\t' '
-NR==1 {
-	for (i=1; i<=NF; i++) {
-        	if ($i=="sequence_length_template") lencol=i;
-        	if ($i=="mean_qscore_template") qcol=i;
-    	}
-
-	if (!lencol || !qcol) {
-        	print "Error: required column not found in header." > "/dev/stderr";
-        	exit 1;
-    	}
-	next
-}
-
-{
-	printf "%s\t%.2f\n", $lencol, $qcol
-}
-' "${submission_folder}/summaries/sequencing_summary_${run_name}.all.txt" \
-| sort -k1,1nr \
-| awk 'NR<=5' >> "$log"
-
-# print 5 longest reads with their associated qscores for pass reads
-echo "Pass reads:" >> "$log"
-
-awk -F'\t' '
-NR==1 {
-        for (i=1; i<=NF; i++) {
-                if ($i=="sequence_length_template") lencol=i;
-                if ($i=="mean_qscore_template") qcol=i;
-        }
-
-        if (!lencol || !qcol) {
-                print "Error: required column not found in header." > "/dev/stderr";
-                exit 1;
-        }
-        next
-}
-
-{
-        printf "%s\t%.2f\n", $lencol, $qcol
-}
-' "${submission_folder}/summaries/sequencing_summary_${run_name}.pass.txt" \
-| sort -k1,1nr \
-| awk 'NR<=5' >> "$log"
-
-# number of reads > 40kb and > 100kb and number of active channels for all reads
-awk -F'\t' '
-NR==1 {
-        for (i=1; i<=NF; i++) {
-                if ($i=="mean_qscore_template") qcol=i;
-                if ($i=="sequence_length_template") lencol=i;
-                if ($i=="channel") chcol=i;
-        }
-
-        if (!qcol || !lencol || !chcol) {
-                print "Error: required column not found in header." > "/dev/stderr";
-                exit 1;
-        }
-        next
-}
-
-{
-        q = $qcol;
-        len = $lencol;
-        ch = $chcol;
-
-        qsum += 10^(-q/10);
-        count++;
-
-        if (len > 40000) over40k++;
-        if (len > 100000) over100k++;
-        channels[ch]++;
-}
-
-END {
-        if (count > 0) {
-                meanQ = -10 * log(qsum / count) / log(10);
-                printf "Mean read quality (all reads): %.1f\n", meanQ;
-        }
-
-        printf "Number of reads (all reads) > 40kb: %d reads\n", over40k;
-        printf "Number of reads (all reads) > 100kb: %d reads\n", over100k;
-        printf "Active channels (all reads): %d\n", length(channels);
-}
-' "${submission_folder}/summaries/sequencing_summary_${run_name}.all.txt" >> "$log"
-
-# number of reads > 40kb and > 100kb and number of active channels for pass reads
-awk -F'\t' '
-NR==1 {
-        for (i=1; i<=NF; i++) {
-                if ($i=="mean_qscore_template") qcol=i;
-                if ($i=="sequence_length_template") lencol=i;
-                if ($i=="channel") chcol=i;
-        }
-
-        if (!qcol || !lencol || !chcol) {
-                print "Error: required column not found in header." > "/dev/stderr";
-                exit 1;
-        }
-        next
-}
-
-{
-        q = $qcol;
-        len = $lencol;
-        ch = $chcol;
-
-        qsum += 10^(-q/10);
-        count++;
-
-        if (len > 40000) over40k++;
-        if (len > 100000) over100k++;
-        channels[ch]++;
-}
-
-END {
-        if (count > 0) {
-                meanQ = -10 * log(qsum / count) / log(10);
-                printf "Mean read quality (pass reads): %.1f\n", meanQ;
-        }
-
-        printf "Number of reads (pass reads) > 40kb: %d reads\n", over40k;
-        printf "Number of reads (pass reads) > 100kb: %d reads\n", over100k;
-        printf "Active channels (pass reads): %d\n", length(channels);
-}
-' "${submission_folder}/summaries/sequencing_summary_${run_name}.pass.txt" >> "$log"
+echo ">>>>>>>>>>> STATS & METRICS <<<<<<<<<<<" | tee -a "$log"
+echo "" | tee -a "$log"
+echo "--- All reads ---" | tee -a "$log"
+bash "$(dirname "$0")/get_stats.sh" "$temp_all_reads" | tee -a "$log"
+echo "--- Pass reads ---" | tee -a "$log"
+bash "$(dirname "$0")/get_stats.sh" "${ubam_folder}/${run_name}.pass.bam" | tee -a "$log"
 
 ############## CLEAN FILES AND END LOG FILE ##############
 
 rm -r "${submission_folder}/temp"
-rm -r "$tmp_models_dir"
+rm -rf "$tmp_models_dir"
 
 echo "" | tee -a "$log"
 echo "Run ended at: $(date '+%d-%m-%Y %H:%M:%S')" | tee -a "$log"
@@ -818,7 +598,7 @@ echo "Run ended at: $(date '+%d-%m-%Y %H:%M:%S')" | tee -a "$log"
 echo "" | tee -a "$log"
 echo ">>>>>>>> BASECALLED POD5 FILES <<<<<<<<" >> "$log"
 echo "" >> "$log"
-find "$pod5_directory" -type f -name "*.pod5" -exec basename {} \; >> "$log"
+find "$pod5_directory" \( -type f -o -type l \) -name "*.pod5" -exec basename {} \; >> "$log"
 {
   echo ""
   echo "╔═══════════════════════════════════════╗"
