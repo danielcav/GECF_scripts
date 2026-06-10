@@ -35,8 +35,8 @@ All other dependencies are managed through the provided conda environment.
 **1. Clone the repository**
 
 ```bash
-git clone https://github.com/danielcav/GECF-scripts.git
-cd GECF-scripts
+git clone https://github.com/danielcav/GECF_scripts.git
+cd GECF_scripts
 ```
 
 **2. Create the conda environment**
