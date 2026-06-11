@@ -10,6 +10,7 @@ Scripts developed at the **Gene Expression Core Facility (GECF)** for Oxford Nan
 - [Installation](#installation)
 - [Scripts Overview](#scripts-overview)
 - [dorado_basecaller_prod.sh](#dorado_basecaller_prodsh)
+- [format_sample_sheet.sh](#format_sample_sheetssh)
 - [demux.sh](#demuxsh)
 - [get_stats.sh](#get_statssh)
 - [filter_adaptive_sampling.sh](#filter_adaptive_samplingsh)
@@ -68,6 +69,7 @@ chmod +x *.sh
 | Script | Description |
 |---|---|
 | `dorado_basecaller_prod.sh` | Basecalls raw pod5 files using Dorado |
+| `format_sample_sheet.sh` | Generates a sample sheet for demultiplexing |
 | `demux.sh` | Demultiplexes barcoded basecalled BAM files |
 | `get_stats.sh` | Computes sequencing statistics from a BAM file |
 | `filter_adaptive_sampling.sh` | Filters pod5 files using adaptive sampling decisions |
@@ -123,6 +125,59 @@ bash dorado_basecaller_prod.sh --qscore 10
 
 > If reads are barcoded, the script will stop after basecalling and ask you to run `demux.sh` next.
 
+---
+ 
+## format_sample_sheet.sh
+ 
+Generates a properly formatted sample sheet CSV file required by `demux.sh`. It takes a simple text file mapping barcodes to sample names and enriches it with run metadata (kit name, experiment name, sequencer position), either by auto-detecting them from a pod5 file or by manual input.
+ 
+> Always run this script before `demux.sh`.
+ 
+### Usage
+ 
+```bash
+bash format_sample_sheet.sh <barcode_aliases.txt>
+```
+ 
+### Input file format
+ 
+A plain text file with one entry per line, formatted as `barcode;sample_name`:
+ 
+```
+barcode01;sample1
+barcode02;sample2
+barcode03;HEK293
+barcode04;HeLa
+```
+ 
+### The script will interactively ask for
+ 
+- Whether to auto-detect metadata from a pod5 file (recommended)
+- If auto-detect: path to a pod5 file or directory
+- If manual: kit name, experiment name, and sequencer position (A or B)
+### Output
+ 
+A CSV sample sheet saved in the current directory:
+ 
+```
+sample_sheet_<experiment_name>.csv
+```
+ 
+With the following structure:
+ 
+```
+experiment_id,kit,position_id,barcode,alias
+SOL0046,SQK-NBD114-24,P2S-00697-A,barcode01,sample1
+SOL0046,SQK-NBD114-24,P2S-00697-A,barcode02,sample2
+```
+ 
+### Example
+ 
+```bash
+bash format_sample_sheet.sh barcodes_SOL0046.txt
+# When prompted, choose auto-detect and provide the pod5 directory
+```
+ 
 ---
 
 ## demux.sh
