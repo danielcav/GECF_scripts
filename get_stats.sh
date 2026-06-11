@@ -77,7 +77,16 @@ STREAM_CMD="samtools view -@ 10 -F 2304 \"$INPUT_FILE\" | awk -F'\t' '
 echo "Done!"
 echo "Generating stats..."
 
-# --- Metric Calculation Pass ---
+med_q=$(eval "$STREAM_CMD" | awk -F'\t' '{print $2}' | sort -n | awk '
+{
+	scores[NR] = $1
+}
+END {
+	if (NR % 2 == 1) printf "%.2f", scores[(NR+1)/2]
+	else printf "%.2f", (scores[NR/2] + scores[(NR/2)+1]) / 2
+}')
+
+# --- Metric Calculation ---
 if [ -n "$LOG_FILE" ]; then
 	eval "$STREAM_CMD" | sort -k1,1n | awk -F'\t' -v logfile="$LOG_FILE" '
 	{
@@ -98,9 +107,9 @@ if [ -n "$LOG_FILE" ]; then
 
 		# Calculate Medians
 		if (NR % 2 == 1) {
-			med_len = lens[(NR+1)/2]; med_q = qs[(NR+1)/2]
+			med_len = lens[(NR+1)/2]
 	    	} else {
-	        	med_len = (lens[NR/2] + lens[(NR/2)+1]) / 2; med_q = (qs[NR/2] + qs[(NR/2)+1]) / 2
+	        	med_len = (lens[NR/2] + lens[(NR/2)+1]) / 2
 	    	}
 
 		mean_len = total_bases / NR
@@ -126,7 +135,7 @@ if [ -n "$LOG_FILE" ]; then
 		printf "Median read length      : %d bases\n", med_len >> logfile
 		printf "Read length N50         : %d bases\n", n50 >> logfile
 		printf "Mean read quality       : %.1f Q\n", mean_q >> logfile
-		printf "Median read quality     : %.2f Q\n", med_q >> logfile
+		printf "Median read quality     : %s Q\n", "'"$med_q"'" >> logfile
 		printf "Reads greater than 40kb : %d\n", over40k >> logfile
 		printf "Reads greater than 100kb: %d\n", over100k >> logfile
 		printf "Active system channels  : %d\n", length(channels) >> logfile
@@ -156,9 +165,9 @@ else
 			exit 1
             	}
             	if (NR % 2 == 1) {
-			med_len = lens[(NR+1)/2]; med_q = qs[(NR+1)/2]
+			med_len = lens[(NR+1)/2]
 		} else {
-			med_len = (lens[NR/2] + lens[(NR/2)+1]) / 2; med_q = (qs[NR/2] + qs[(NR/2)+1]) / 2
+			med_len = (lens[NR/2] + lens[(NR/2)+1]) / 2
             	}
 		mean_len = total_bases / NR
 		mean_q = -10 * log(q_sum / NR) / log(10)
@@ -168,7 +177,7 @@ else
 			if (running_sum >= half_bases) { n50 = lens[i]; break; }
             	}
 		print "--- uBAM Sequencing Production Statistics ---"
-		printf "Total parsed reads      : %d reads\n", NR
+		printf "Number of reads         : %d reads\n", NR
 		if (total_bases < 1e6)
 			printf "Total yield             : %.2f kb (%d bases)\n", total_bases / 1e3, total_bases
 		else if (total_bases < 1e9)
@@ -179,7 +188,7 @@ else
 		printf "Median read length      : %d bases\n", med_len
 		printf "Read length N50         : %d bases\n", n50
 		printf "Mean read quality       : %.1f Q\n", mean_q
-		printf "Median read quality     : %.2f Q\n", med_q
+		printf "Median read quality     : %s Q\n", "'"$med_q"'"
 		printf "Reads greater than 40kb : %d\n", over40k
 		printf "Reads greater than 100kb: %d\n", over100k
 		printf "Active system channels  : %d\n", length(channels)
