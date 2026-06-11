@@ -1,6 +1,3 @@
-# GECF_scripts
-A centralized collection of internal scripts developed for the GECF. This repository facilitates version control, ensures resource accessibility, and tracks the developmental evolution of our tools and utilities.
-
 # GECF Scripts
 
 Scripts developed at the **Gene Expression Core Facility (GECF)** for Oxford Nanopore Technology (ONT) data processing. These scripts cover the full workflow from raw pod5 files to basecalled and demultiplexed reads, with QC metrics at each step.
