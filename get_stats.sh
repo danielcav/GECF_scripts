@@ -59,7 +59,7 @@ echo "Extracting BAM tags (qs, ch)..."
 # Extract read sequence length, mean Q-score tag (qs:f), and channel tag (ch:i)
 # This bypasses character-by-character calculation, speeding processing.
 # Hardcoded number of threads
-STREAM_CMD="samtools view -@ 10 \"$INPUT_FILE\" | awk -F'\t' '
+STREAM_CMD="samtools view -@ 10 -F 2304 \"$INPUT_FILE\" | awk -F'\t' '
 {
 	len = length(\$10);
 
@@ -116,7 +116,12 @@ if [ -n "$LOG_FILE" ]; then
 		# Write out report
 		print "--- uBAM Sequencing Production Statistics ---" >> logfile
 		printf "Number of reads	        : %d reads\n", NR >> logfile
-		printf "Total yield             : %.2f Gb\n", total_bases / 1e9 >> logfile
+		if (total_bases < 1e6)
+			printf "Total yield             : %.2f kb (%d bases)\n", total_bases / 1e3, total_bases >> logfile
+		else if (total_bases < 1e9)
+			printf "Total yield             : %.2f Mb (%d bases)\n", total_bases / 1e6, total_bases >> logfile
+		else
+			printf "Total yield             : %.2f Gb (%d bases)\n", total_bases / 1e9, total_bases >> logfile
 		printf "Mean read length        : %.1f bases\n", mean_len >> logfile
 		printf "Median read length      : %d bases\n", med_len >> logfile
 		printf "Read length N50         : %d bases\n", n50 >> logfile
@@ -164,7 +169,12 @@ else
             	}
 		print "--- uBAM Sequencing Production Statistics ---"
 		printf "Total parsed reads      : %d reads\n", NR
-		printf "Total yield             : %.2f Gb\n", total_bases / 1e9
+		if (total_bases < 1e6)
+			printf "Total yield             : %.2f kb (%d bases)\n", total_bases / 1e3, total_bases
+		else if (total_bases < 1e9)
+			printf "Total yield             : %.2f Mb (%d bases)\n", total_bases / 1e6, total_bases
+		else
+			printf "Total yield             : %.2f Gb (%d bases)\n", total_bases / 1e9, total_bases
 		printf "Mean read length        : %.1f bases\n", mean_len
 		printf "Median read length      : %d bases\n", med_len
 		printf "Read length N50         : %d bases\n", n50
