@@ -10,7 +10,7 @@ Scripts developed at the **Gene Expression Core Facility (GECF)** for Oxford Nan
 - [Installation](#installation)
 - [Scripts Overview](#scripts-overview)
 - [dorado_basecaller_prod.sh](#dorado_basecaller_prodsh)
-- [format_sample_sheet.sh](#format_sample_sheet.sh)
+- [format_sample_sheet.sh](#format_sample_sheetsh)
 - [demux.sh](#demuxsh)
 - [get_stats.sh](#get_statssh)
 - [filter_adaptive_sampling.sh](#filter_adaptive_samplingsh)
