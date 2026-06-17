@@ -122,14 +122,17 @@ done
 read -e -i "p2sid00" -p "Enter the project name (e.g., p2sidXXXX): " run_name
 
 while true; do
-	read -ep "Enter the pod5 directory path: " input_path
-    	pod5_directory=$(realpath -e "${input_path/#\~/$HOME}" 2>/dev/null || true)
-    	if [[ -n "$pod5_directory" ]] && [[ -d "$pod5_directory" ]]; then
-        	echo "Directory exists: $pod5_directory"
-        	break
-    	else
-        	echo "Directory does not exist. Please try again."
-    	fi
+        read -ep "Enter the pod5 file or directory path: " input_path
+        pod5_directory=$(realpath -e "${input_path/#\~/$HOME}" 2>/dev/null || true)
+        if [[ -n "$pod5_directory" ]] && [[ -d "$pod5_directory" ]]; then
+                echo "Directory exists: $pod5_directory"
+                break
+        elif [[ -n "$pod5_directory" ]] && [[ -f "$pod5_directory" ]] && [[ "$pod5_directory" == *.pod5 ]]; then
+                echo "File exists: $pod5_directory"
+                break
+        else
+                echo "Path does not exist or is not a valid pod5 file/directory. Please try again."
+        fi
 done
 
 project_root_path=$(dirname "$pod5_directory")
@@ -340,7 +343,11 @@ done
 # IDEA: pod5 file metadata can be used to output non trimmed raw files for duplex and either directly do the demultiplexing using the basecaller for simplex reads
 # or format files so they are ready-to-use for the demux.sh script. Additionally, don't create a submission for multiplexed reads in this script (do it in demux.sh).
 echo "Detecting sequencing kit..."
-first_pod5_file=$(find "$pod5_directory" -type f -name "*.pod5" -printf "%s %p\n" | sort -n | head -n 1 | awk '{print $2}')
+if [[ -f "$pod5_directory" ]]; then
+        first_pod5_file="$pod5_directory"
+else
+        first_pod5_file=$(find "$pod5_directory" -type f -name "*.pod5" -printf "%s %p\n" | sort -n | head -n 1 | awk '{print $2}')
+fi
 
 # Extract sequencing kit
 kit_name=$(pod5 inspect debug "$first_pod5_file" | \
@@ -436,7 +443,7 @@ echo "" | tee -a "$log"
 	echo ""
 	echo "> dorado    $(dorado --version 2>&1)"
 	echo "> samtools  $(samtools --version | head -1 | awk '{print $NF}')"
-	echo "> NanoPlot  $(NanoPlot --version | awk '{print $NF}')"
+#	echo "> NanoPlot  $(NanoPlot --version | awk '{print $NF}')"
 	echo "> pigz      $(pigz --version | awk '{print $NF}')"
 	echo "> pod5      $(pod5 --version | awk '{print $NF}')"
 	echo "> sequali   $(sequali --version)"
@@ -618,7 +625,13 @@ echo "Run ended at: $(date '+%d-%m-%Y %H:%M:%S')" | tee -a "$log"
 echo "" | tee -a "$log"
 echo ">>>>>>>> BASECALLED POD5 FILES <<<<<<<<" >> "$log"
 echo "" >> "$log"
-find "$pod5_directory" \( -type f -o -type l \) -name "*.pod5" -exec basename {} \; >> "$log"
+
+if [[ -f "$pod5_directory" ]]; then
+        basename "$pod5_directory" >> "$log"
+else
+        find "$pod5_directory" \( -type f -o -type l \) -name "*.pod5" -exec basename {} \; >> "$log"
+fi
+
 {
   echo ""
   echo "╔═══════════════════════════════════════╗"
