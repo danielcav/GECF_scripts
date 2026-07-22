@@ -15,6 +15,7 @@ declare -a dependencies_list=(
         "samtools"
         "dorado"
 #       "NanoPlot"
+	"multiqc"
         "pigz"
         "pod5"
         "sequali"
@@ -58,7 +59,10 @@ if [[ ${#missing_dependencies[@]} -gt 0 ]]; then
                         "jq")
                                 echo "- jq (conda install -c conda-forge jq)"
                                 ;;
-                        *)
+                	"multiqc")
+				echo "- multiqc (conda install -c bioconda multiqc)"
+				;;
+		        *)
                                 echo "- $dep"
                                 ;;
                 esac
@@ -248,7 +252,8 @@ echo "" | tee -a "$log"
         echo ""
         echo "> dorado    $(dorado --version 2>&1)"
         echo "> samtools  $(samtools --version | head -1 | awk '{print $NF}')"
-        echo "> NanoPlot  $(NanoPlot --version | awk '{print $NF}')"
+#        echo "> NanoPlot  $(NanoPlot --version | awk '{print $NF}')"
+	echo "> multiqc   $(multiqc --version | awk '{print $NF}')"
         echo "> pigz      $(pigz --version | awk '{print $NF}')"
         echo "> pod5      $(pod5 --version | awk '{print $NF}')"
         echo "> sequali   $(sequali --version)"
@@ -733,6 +738,24 @@ find "${root_path}/ubam_files" -type f -name "*.bam" | while read bamfile; do
 	rm "$bamfile"
 done
 
+echo -n "Creating MultiQC report for all reads across all samples..." | tee -a "$log"
+multiqc \
+	$(find "${root_path}/QC_reports" -type d -name "sequali_all") \
+	--outdir "${root_path}/QC_reports/multiqc_all" \
+	--filename "all_reads_multiqc_report" \
+	--force \
+	2>&1 | tee -a "$log"
+echo "Done" | tee -a "$log"
+
+echo -n "Creating MultiQC report for pass reads across all samples..." | tee -a "$log"
+multiqc \
+	$(find "${root_path}/QC_reports" -type d -name "sequali_pass") \
+	--outdir "${root_path}/QC_reports/multiqc_pass" \
+	--filename "pass_reads_multiqc_report" \
+	--force \
+	2>&1 | tee -a "$log"
+echo "Done" | tee -a "$log"
+
 # make a sequencing summary for "all" and "all pass" reads
 echo -n "Creating sequencing summaries for all reads and all pass reads..." | tee -a "$log"
 
@@ -763,14 +786,14 @@ echo "Done" | tee -a "$log"
 
 mapfile -t all_bams < <(find "${root_path}/ubam_files" -type f -name "*.bam")
 if [[ ${#all_bams[@]} -eq 0 ]]; then
-    echo "Error: No BAM files found in ubam_files." >&2
-    exit 1
+	echo "Error: No BAM files found in ubam_files." >&2
+	exit 1
 fi
 
 mapfile -t pass_bams < <(find "${root_path}/ubam_files" -type f -name "*.pass.bam")
 if [[ ${#pass_bams[@]} -eq 0 ]]; then
-    echo "Error: No pass BAM files found in ubam_files." >&2
-    exit 1
+	echo "Error: No pass BAM files found in ubam_files." >&2
+	exit 1
 fi
 
 temp_pass_bam="${root_path}/temp/all_pass_reads.bam"
@@ -788,7 +811,6 @@ sequali "$temp_pass_bam" \
 	--json "${run_name}_all_pass_reads.json" \
 	--html "${run_name}_all_pass_reads.html" \
         --outdir "${root_path}/QC_reports/${run_name}_all_reads/sequali_pass"
-
 
 #echo -n "Creating NanoPlot for all reads and all pass reads..." | tee -a "$log"
 #NanoPlot --summary "${root_path}/summaries/all/${run_name}_all_reads_sequencing_summary.txt" \
@@ -832,6 +854,8 @@ if [[ $simplex_only == false ]]; then
 fi
 
 bash "$(dirname "$0")/get_stats.sh" "$temp_all_bam" | tee -a "$log"
+
+bash "$(dirname "$0")/get_stats.sh" "$temp_pass_bam" | tee -a "$log"
 
 ############################################################################
 #                               CLEANING                                   #
