@@ -17,6 +17,7 @@ dependencies:
   - nanoqc
   - pigz
   - pip
+  - multiqc
   - pip:
     - pod5
     - sequali
