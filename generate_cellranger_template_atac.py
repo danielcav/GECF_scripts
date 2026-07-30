@@ -16,6 +16,8 @@ cellranger-atac_AVT0XXX.sh script pre-filled with one
 """
 
 import argparse
+import readline
+import glob
 import os
 import re
 import sys
@@ -29,11 +31,19 @@ except ImportError:
     )
 
 
-HUMAN_GENOME_PATH = "/mnt/PTEGraw/AA/References/refdata-cellranger-arc-GRCh38-2024-A"
-MOUSE_GENOME_PATH = "/mnt/PTEGraw/AA/References/refdata-cellranger-arc-GRCm39-2024-A"
+HUMAN_GENOME_PATH = "/home/gecf/references/cellranger_references/current_human_arc_ATAC/refdata-cellranger-arc-GRCh38-2024-A"
+MOUSE_GENOME_PATH = "/home/gecf/references/cellranger_references/current_mouse_arc_ATAC/refdata-cellranger-arc-GRCm39-2024-A"
 
 AVT_PATTERN = re.compile(r"AVT0?\d{3,5}", re.IGNORECASE)
 
+def _path_completer(text, state):
+    matches = glob.glob(os.path.expanduser(text) + "*")
+    matches = [m + "/" if os.path.isdir(m) else m for m in matches]
+    return matches[state] if state < len(matches) else None
+
+readline.set_completer_delims(" \t\n;")
+readline.set_completer(_path_completer)
+readline.parse_and_bind("tab: complete")
 
 def norm(value):
     if value is None:
@@ -219,13 +229,22 @@ def print_pairs_table(pairs):
 
 def ask_avt_run(detected_avt):
     if detected_avt:
-        print(f"Detected run name: {detected_avt}")
-        answer = input("Use this run name? [Y/n]: ").strip() or "Y"
-        if answer[0].lower() == "y":
-            return detected_avt
-        return input("Enter the AVT run name (e.g. AVT0226): ").strip()
-    return input("No AVT run name detected. Enter it manually (e.g. AVT0226): ").strip()
+        while True:
+            print(f"Detected run name: {detected_avt}")
+            answer = input("Use this run name? [Y/n]: ").strip()
+            if answer[0].lower() == "y":
+                return detected_avt
+            elif answer[0].lower() == "n":
+                break
+            else:
+                print("Answer can only be Y or n. Please try again.")
+                continue
 
+    while True:
+        avt_run = input("Enter the AVT run name (e.g. AVT0226): ").strip()
+        if avt_run:
+            return avt_run
+        print("AVT run name cannot be empty. Please try again.")
 
 def ask_reference_genome():
     print()
@@ -233,19 +252,22 @@ def ask_reference_genome():
     print("  1) Current human genome")
     print("  2) Current mouse genome")
     print("  3) Custom genome (specify path)")
-    choice = input("Enter choice [1-3]: ").strip()
+    while True:
+        choice = input("Enter choice [1-3]: ").strip()
 
-    if choice == "1":
-        return HUMAN_GENOME_PATH
-    elif choice == "2":
-        return MOUSE_GENOME_PATH
-    elif choice == "3":
-        path = input("Enter full path to custom genome reference: ").strip()
-        if not os.path.isdir(path):
-            sys.exit(f"Error: path '{path}' does not exist.")
-        return path
-    else:
-        sys.exit(f"Error: invalid choice '{choice}'.")
+        if choice == "1":
+            return HUMAN_GENOME_PATH
+        elif choice == "2":
+            return MOUSE_GENOME_PATH
+        elif choice == "3":
+            path = input("Enter full path to custom genome reference: ").strip()
+            if os.path.isdir(path):
+                return path
+            print(f"Error: path '{path}' does not exist. Please try again.")
+            continue
+        else:
+            print(f"Invalid choice '{choice}'. Please enter 1, 2, or 3.")
+            continue
 
 
 NGS_BASE_DIR_TEMPLATE = "/mnt/PTEGraw/AA/NGSruns/AVT/AV240401/{avt_run}"
