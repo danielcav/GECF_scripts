@@ -1,0 +1,103 @@
+# ----------------------
+# Python
+# ----------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache/
+
+# Type checkers
+.mypy_cache/
+.pyre/
+.pytype/
+
+# Linters
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Python version managers
+.python-version
+
+# ----------------------
+# Bash
+# ----------------------
+
+# Temporary files
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+
+# Shell history
+.bash_history
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# ----------------------
+# IDEs / Editors
+# ----------------------
+.vscode/
+.idea/
+
+# ----------------------
+# Logs
+# ----------------------
+*.log
+logs/
+
+# ----------------------
+# OS files
+# ----------------------
+Thumbs.db
+Desktop.ini
+
+# ----------------------
+# Secrets
+# ----------------------
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# ----------------------
+# Local configuration
+# ----------------------
+.local/
