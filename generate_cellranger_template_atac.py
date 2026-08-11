@@ -86,7 +86,15 @@ def parse_xlsx(path):
     detected_avt_run: string or None
     """
     wb = openpyxl.load_workbook(path, data_only=True)
-    ws = wb.active  # first/active sheet
+    print(f"  Sheets: {', '.join(wb.sheetnames)}")
+
+    if "User_x1x_copy" in wb.sheetnames:
+        ws = wb["User_x1x_copy"]
+        print(f"  -> Using 'User_x1x_copy' sheet")
+    else:
+        ws = wb.active
+        print(f"  -> Using active sheet '{ws.title}'")
+
     merged_lookup = build_merged_cell_lookup(ws)
 
     fastq_col = None
@@ -227,7 +235,12 @@ def print_pairs_table(pairs):
     print(sep)
 
 
+# Global flag for non-interactive execution (CI/testing)
+NON_INTERACTIVE = False
+
 def ask_avt_run(detected_avt):
+    if NON_INTERACTIVE:
+        return detected_avt or "AVT0000"
     if detected_avt:
         while True:
             print(f"Detected run name: {detected_avt}")
@@ -247,6 +260,8 @@ def ask_avt_run(detected_avt):
         print("AVT run name cannot be empty. Please try again.")
 
 def ask_reference_genome():
+    if NON_INTERACTIVE:
+        return HUMAN_GENOME_PATH
     print()
     print("Which reference genome do you want to use?")
     print("  1) Current human genome")
@@ -296,6 +311,7 @@ def find_fastq_path(avt_run, fastq_id):
 def build_script(avt_run, reference_genome, pairs):
     lines = []
     lines.append("#!/bin/bash")
+    lines.append("TIMESTAMP=$(date +%Y%m%d_%H%M%S)")
     lines.append("")
 
     base_dir = NGS_BASE_DIR_TEMPLATE.format(avt_run=avt_run)
@@ -322,11 +338,16 @@ def build_script(avt_run, reference_genome, pairs):
     lines.append(f"reference_genome_used={reference_genome}")
     lines.append("")
 
+    lines.append("# Extra cellranger-atac options (leave empty if none)")
+    lines.append("# Examples: --chemistry=ARC-v1  --no-bam  --min-atac-count=500")
+    lines.append("CUSTOM_OPTIONS=")
+    lines.append("")
+
     lines.extend(f"""
 # Specify input folder (i.e. where cellranger count output files are located)
 # example: /mnt/data/CellRangerCountOutput/
 Server_folder=
-# example: {base_dir}/CRatac_user_name
+# example: {base_dir}/CRatac_{avt_run}_${{TIMESTAMP}}
 NGSruns_folder=
 
 # checks if folders exist
@@ -344,18 +365,63 @@ fi
     lines.append("")
 
     for idx, (sample_name, fastq) in enumerate(pairs, start=1):
-        lines.extend(f"""
-cellranger-atac count --id={sample_name} \\
-                       --description={fastq} \\
-                       --reference=${{reference_genome_used}} \\
-                       --fastqs=${{fastq_path_{idx}}}
-                       # --localcores=30 \\
-                       # --localmem=100 \\
-                       # --chemistry=ARC-v1  # only if we want to analyze ATAC only results coming from multiome
-                       # --no-bam            # relevant for ATAC only????
-""".strip("\n").splitlines())
+        numbered_dir = f'$(printf "%02d" {idx})_{sample_name}_atac'
+        lines.append(f"# --- Sample {idx}: {sample_name} ---")
+        lines.append(
+            f"cellranger-atac count --id={sample_name} \\"
+        )
+        lines.append(
+            f"                       --description={fastq} \\"
+        )
+        lines.append(
+            f"                       --reference=${{reference_genome_used}} \\"
+        )
+        lines.append(
+            f"                       --fastqs=${{fastq_path_{idx}}} \\"
+        )
+        lines.append(
+            f"                       --output=${{NGSruns_folder}}/{numbered_dir} \\"
+        )
+        lines.append(
+            f"                       ${{CUSTOM_OPTIONS}}"
+        )
         lines.append("")
+        lines.append(
+            f"# Clean up SC_ATAC_COUNTER_CS (non-useful)"
+        )
+        lines.append(
+            f"rm -rf ${{NGSruns_folder}}/{numbered_dir}/sc/atac/count/{sample_name}_atac/sc_atac_counter_cs/* 2>/dev/null || true"
+        )
+        lines.append("")
+
+    # Post-processing: collect WebSummaries into a {avt_run}_Summaries folder
     lines.append("")
+    lines.append("# ------------------------------------ POST-PROCESSING ------------------------------------ #")
+    lines.append("")
+    lines.append("# Collect per-sample WebSummaries into one folder")
+    lines.append(f"mkdir -p ${{NGSruns_folder}}/{avt_run}_Summaries")
+    lines.append("")
+    for idx, (sample_name, fastq) in enumerate(pairs, start=1):
+        numbered_dir = f'$(printf "%02d" {idx})_{sample_name}_atac'
+        sample_atac_id = f"{sample_name}_atac"
+        lines.append(
+            f"cp -n ${{NGSruns_folder}}/{numbered_dir}/ats/bam/web_summary/index.html "
+            f"${{NGSruns_folder}}/{avt_run}_Summaries/{sample_name}_WebSummary.html 2>/dev/null || true"
+        )
+    lines.append("")
+
+    # Collect summary.csv files into one merged CSV
+    lines.append("# Merge all per-sample summary.csv into a single file")
+    lines.append(f"echo 'fastq_id|sample_name|summary_field|value' > ${{NGSruns_folder}}/{avt_run}_Summaries/all_summary.csv")
+    for idx, (sample_name, fastq) in enumerate(pairs, start=1):
+        numbered_dir = f'$(printf "%02d" {idx})_{sample_name}_atac'
+        sample_atac_id = f"{sample_name}_atac"
+        lines.append(
+            f"sed 1d ${{NGSruns_folder}}/{numbered_dir}/ats/bam/pipeline_info/summary.csv 2>/dev/null | "
+            f"awk -F',' '{{print \"{fastq}|{sample_name}|$0\"}}' >> ${{NGSruns_folder}}/{avt_run}_Summaries/all_summary.csv || true"
+        )
+    lines.append("")
+
     lines.append("")
     lines.extend("""
 #### Arguments TO BE EDITED ----> ARGUMENTS BELOW ARE FOR MULTIOME 
@@ -374,7 +440,7 @@ cellranger-atac count --id={sample_name} \\
 
 
 
-rsync -aqrW ${Server_folder} ${NGSruns_folder}
+rsync -aqrW ${{Server_folder}} ${{NGSruns_folder}}
 """.strip("\n").splitlines())
 
     return "\n".join(lines) + "\n"
@@ -382,40 +448,69 @@ rsync -aqrW ${Server_folder} ${NGSruns_folder}
 def main():
     parser = argparse.ArgumentParser(
         description=(
-            "Parses an Excel sheet and generates a cellranger-atac_AVT0XXX.sh "
+            "Parses one or more Excel sheets and generates a cellranger-atac_AVT0XXX.sh "
             'script with one "cellranger-atac count" block per sample.'
         ),
-        epilog="Example:\n  python3 %(prog)s samples.xlsx",
+        epilog="Example:\n  python3 %(prog)s samples.xlsx\n  python3 %(prog)s run1.xlsx run2.xlsx run3.xlsx",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "xlsx_file",
+        "xlsx_files",
+        nargs="+",
         help=(
-            "Excel file containing at least the columns "
+            "One or more Excel files containing at least the columns "
             "'GECF fastq ID (avidxxxx)' and 'Sample name'. "
             "A cell containing the run name (e.g. AVT0226) is also "
             "searched for automatically."
         ),
     )
+    parser.add_argument(
+        "--non-interactive", "-n",
+        action="store_true",
+        default=False,
+        help="Skip all prompts, use detected values and human genome as defaults.",
+    )
     args = parser.parse_args()
 
-    xlsx_file = args.xlsx_file
+    global NON_INTERACTIVE
+    NON_INTERACTIVE = args.non_interactive
+    xlsx_files = args.xlsx_files
 
-    if not os.path.isfile(xlsx_file):
-        sys.exit(f"Error: file '{xlsx_file}' does not exist.")
+    all_pairs = []
+    all_detected_avts = []
 
-    if not xlsx_file.lower().endswith(".xlsx"):
-        sys.exit(f"Error: '{xlsx_file}' does not look like an .xlsx file.")
+    for xlsx_file in xlsx_files:
+        if not os.path.isfile(xlsx_file):
+            sys.exit(f"Error: file '{xlsx_file}' does not exist.")
+        if not xlsx_file.lower().endswith(".xlsx"):
+            sys.exit(f"Error: '{xlsx_file}' does not look like an .xlsx file.")
 
-    pairs, detected_avt = parse_xlsx(xlsx_file)
+        pairs, detected_avt = parse_xlsx(xlsx_file)
+        if not pairs:
+            print(f"Warning: no sample/fastq ID pairs found in '{xlsx_file}' — skipping.")
+            continue
 
-    if not pairs:
-        sys.exit(f"Error: no sample/fastq ID pairs could be parsed from '{xlsx_file}'.")
+        all_pairs.extend(pairs)
+        if detected_avt:
+            all_detected_avts.append(detected_avt)
+
+    if not all_pairs:
+        sys.exit("Error: no sample/fastq ID pairs could be parsed from the provided file(s).")
 
     print()
-    print(f"Parsed {len(pairs)} sample(s):")
-    print_pairs_table(pairs)
+    print(f"Total: {len(all_pairs)} sample(s) from {len(xlsx_files)} Excel file(s):")
+    print_pairs_table(all_pairs)
     print()
+
+    # If all files share the same AVT, use it. Otherwise let user decide (or pick first in non-interactive).
+    if len(set(all_detected_avts)) == 1:
+        detected_avt = all_detected_avts[0]
+    elif len(set(all_detected_avts)) > 1:
+        print(f"Warning: different run names detected ({', '.join(sorted(set(all_detected_avts)))}).")
+        print("Using the first one as default — you can change it below.")
+        detected_avt = all_detected_avts[0]
+    else:
+        detected_avt = None
 
     avt_run = ask_avt_run(detected_avt)
     if not avt_run:
@@ -423,7 +518,7 @@ def main():
 
     reference_genome = ask_reference_genome()
 
-    script_content = build_script(avt_run, reference_genome, pairs)
+    script_content = build_script(avt_run, reference_genome, all_pairs)
 
     out_script = f"cellranger-atac_{avt_run}.sh"
     with open(out_script, "w") as f:
