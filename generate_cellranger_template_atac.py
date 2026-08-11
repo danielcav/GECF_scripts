@@ -170,6 +170,11 @@ def parse_xlsx(path):
         fastq_val = str(fastq_val).strip() if fastq_val is not None else ""
         sample_val = str(sample_val).strip() if sample_val is not None else ""
 
+        # Excel returns 0 for empty numeric-formatted cells — treat those
+        # the same as genuinely blank.
+        fastq_val = "" if fastq_val == "0" else fastq_val
+        sample_val = "" if sample_val == "0" else sample_val
+
         # Stop immediately if we hit a "Run details" marker row (a common
         # section break some sheets use after the sample table)
         if "run details" in norm(fastq_val) or "run details" in norm(sample_val):
