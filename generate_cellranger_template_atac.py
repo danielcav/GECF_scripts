@@ -36,6 +36,8 @@ except ImportError:
     )
 
 
+NGS_BASE_DIR_TEMPLATE = "/mnt/PTEGraw/AA/NGSruns/AVT/AV240401/{avt_run}"
+
 HUMAN_GENOME_PATH = "/home/gecf/references/cellranger_references/current_human_arc_ATAC/refdata-cellranger-arc-GRCh38-2024-A"
 MOUSE_GENOME_PATH = "/home/gecf/references/cellranger_references/current_mouse_arc_ATAC/refdata-cellranger-arc-GRCm39-2024-A"
 
@@ -389,6 +391,26 @@ def build_script(reference_genome, pairs):
 lines = []
 
 
+def find_fastq_path(avt_run, fastq_id):
+    """
+    Search recursively under the run's base directory for a directory
+    whose name is exactly `fastq_id` (it can live under any subfolder
+    structure). Returns the full path if found, or None if not found
+    (e.g. base dir doesn't exist on this machine, or no matching folder).
+    """
+    base_dir = NGS_BASE_DIR_TEMPLATE.format(avt_run=avt_run)
+
+    if not os.path.isdir(base_dir):
+        return None
+
+    for root, dirnames, _ in os.walk(base_dir):
+        for d in dirnames:
+            if d == fastq_id:
+                return os.path.join(root, d)
+
+    return None
+
+
 def build_script_full(reference_genome, pairs):
     """Build complete cellranger-atac shell script."""
     global lines
@@ -399,35 +421,45 @@ def build_script_full(reference_genome, pairs):
     avt_counts = Counter(avt for _, _, avt in pairs if avt is not None)
     main_avt = avt_counts.most_common(1)[0][0] if avt_counts else "MIXED_runs"
 
-    NGS_BASE_DIR_TEMPLATE = "/mnt/PTEGraw/AA/NGSruns/AVT/AV240401/{avt_run}"
-
     lines.append("#!/bin/bash")
     lines.append("TIMESTAMP=$(date +%Y%m%d_%H%M%S)")
     lines.append("")
 
-    # Build per-fastq variables. Embed each AVT in its variable's path.
-    for idx, (sample_name, fastq_id, avt) in enumerate(pairs, start=1):
-        run_part = avt or main_avt
-        base_dir = NGS_BASE_DIR_TEMPLATE.format(avt_run=run_part)
-        lines.append(f"# --- {idx}. {fastq_id} ({sample_name}, AVT: {run_part}) ---")
-        example_path_comment = f"# full path (adjust subfolders as needed):"
-        example_subdir = f"{base_dir}/{fastq_id}"
-        lines.append(f"# fastq_path_{idx}={example_subdir}")
+    # Group fastq IDs per sample name so each unique sample gets ONE count call
+    from collections import defaultdict, Counter as Ctr
 
-    # Now use the real paths if available, otherwise placeholder.
-    # For now keep it generic for manual editing:
-    lines.extend(f"""
-# Specify input folder (i.e. where cellranger count output files are located)
-# example: /mnt/data/CellRangerCountOutput/
-server_folder=
-# example: {NGS_BASE_DIR_TEMPLATE.format(avt_run=main_avt or "AVTXXXX")}/CRatac_${{TIMESTAMP}}
-NGSruns_folder=
+    samples_to_fastqs = defaultdict(list)
+    for sn, fq, avt in pairs:
+        samples_to_fastqs[sn].append((fq, avt))
 
-reference_genome_used={reference_genome}
-""".strip("\n").splitlines())
+    unique_samples = sorted(samples_to_fastqs.keys())
 
-    lines.append("")
-    lines.append(f"reference_genome_used={reference_genome}")
+    # Probe real filesystem for each fastq dir and build path variables
+    any_missing = False
+    for sn in unique_samples:
+        fastqs = samples_to_fastqs[sn]
+        lines.append("# --- " + sn + " (" + str(len(fastqs)) + " FASTQ(s)) ---")
+        for fq, avt in fastqs:
+            run_part = avt or main_avt
+            base_dir = NGS_BASE_DIR_TEMPLATE.format(avt_run=run_part)
+
+            resolved_path = find_fastq_path(run_part, fq)
+            if resolved_path:
+                lines.append("path_" + sn + "_" + fq + "=" + resolved_path)
+            else:
+                lines.append("# path_" + sn + "_" + fq + "=" + base_dir + "/FIXME_LOCATE_" + fq)
+                if os.path.isdir(base_dir):
+                    print(
+                        "  Warning: no folder named '" + fq + "' found under "
+                        + base_dir + " - path_" + sn + "_" + fq + " needs to be set manually."
+                    )
+                else:
+                    any_missing = True
+        lines.append("")
+
+    if any_missing:
+        print("  Note: some base directories are not on this machine —")
+        print("  all fastq_path variables under those runs need to be set manually.")
     lines.append("")
     lines.append("# Extra cellranger-atac options (leave empty if none)")
     lines.append("# Examples: --chemistry=ARC-v1  --no-bam  --min-atac-count=500")
@@ -462,33 +494,26 @@ fi
 """.strip("\n").splitlines())
     lines.append("")
 
-    for idx, (sample_name, fastq, _) in enumerate(pairs, start=1):
-        numbered_dir = f'$(printf "%02d" {idx})_{sample_name}_atac'
-        lines.append(f"# --- Sample {idx}: {sample_name} ---")
-        lines.append(
-            f"cellranger-atac count --id={sample_name} \\"
-        )
-        lines.append(
-            f"                       --description={fastq} \\"
-        )
-        lines.append(
-            f"                       --reference=${{reference_genome_used}} \\"
-        )
-        lines.append(
-            f"                       --fastqs=${{fastq_path_{idx}}} \\"
-        )
-        lines.append(
-            f"                       --output=${{NGSruns_folder}}/{numbered_dir} \\"
-        )
-        lines.append(
-            f"                       ${{CUSTOM_OPTIONS}}"
-        )
+    for idx, sn in enumerate(unique_samples, start=1):
+        fastqs = samples_to_fastqs[sn]
+        numbered_dir = "$(printf " + '"%02d"' + " " + str(idx) + ")_" + sn + "_atac"
+        fq_list_str = ",".join(fq for fq, _ in fastqs)
+
+        lines.append("# --- Sample " + str(idx) + ": " + sn + " (" + str(len(fastqs)) + " FASTQ(s)) ---")
+        lines.append("cellranger-atac count --id=" + sn)
+        lines.append("                       --description=\"" + fq_list_str + "\" \\")
+        lines.append("                       --reference=${reference_genome_used} \\")
+
+        # Build space-separated path list for all FASTQ dirs of this sample
+        fq_paths = " ".join("${path_" + sn + "_" + fq + "}" for fq, _ in fastqs)
+        lines.append("                       --fastqs=" + fq_paths + r" \\")
+        lines.append("                       --output=${NGSruns_folder}/" + numbered_dir + r" \\")
+        lines.append("                       ${CUSTOM_OPTIONS}")
         lines.append("")
+
+        lines.append("# Clean up SC_ATAC_COUNTER_CS (non-useful)")
         lines.append(
-            f"# Clean up SC_ATAC_COUNTER_CS (non-useful)"
-        )
-        lines.append(
-            f"rm -rf ${{NGSruns_folder}}/{numbered_dir}/sc/atac/count/{sample_name}_atac/sc_atac_counter_cs/* 2>/dev/null || true"
+            "rm -rf ${NGSruns_folder}/" + numbered_dir + "/sc/atac/count/" + sn + "_atac/sc_atac_counter_cs/* 2>/dev/null || true"
         )
         lines.append("")
 
@@ -500,25 +525,26 @@ fi
     lines.append("# Collect per-sample WebSummaries into one folder")
     lines.append(f"mkdir -p ${{NGSruns_folder}}/{post_avt}_Summaries")
     lines.append("")
-    for idx, (sample_name, fastq, _) in enumerate(pairs, start=1):
-        numbered_dir = f'$(printf "%02d" {idx})_{sample_name}_atac'
-        sample_atac_id = f"{sample_name}_atac"
+    for idx, sn in enumerate(unique_samples, start=1):
+        numbered_dir = "$(printf " + '"%02d"' + " " + str(idx) + ")_" + sn + "_atac"
         lines.append(
-            f"cp -n ${{NGSruns_folder}}/{numbered_dir}/ats/bam/web_summary/index.html " \
-            f"${{NGSruns_folder}}/{post_avt}_Summaries/{sample_name}_WebSummary.html 2>/dev/null || true"
+            "cp -n ${NGSruns_folder}/" + numbered_dir + "/ats/bam/web_summary/index.html "
+            "${NGSruns_folder}/" + post_avt + "_Summaries/" + sn + "_WebSummary.html 2>/dev/null || true"
         )
     lines.append("")
 
-    # Collect summary.csv files into one merged CSV
+    # Merge per-sample summary CSVs into a single file
+    merged_csv_quote = '"$' + 'NGSruns_folder}' + '/' + post_avt + '_Summaries/all_summary.csv"'
     lines.append("# Merge per-sample summary CSVs into a single file")
-    lines.append(f'merged_csv="${{NGSruns_folder}}/{post_avt}_Summaries/all_summary.csv"')
-    lines.append(f'echo "fastq_id,sample_name,chrom,mappability_score,population_size,gapless_score" > "$merged_csv"')
-    for idx, (sample_name, fastq, _) in enumerate(pairs, start=1):
-        numbered_dir = f'$(printf "%02d" {idx})_{sample_name}_atac'
+    lines.append('merged_csv="${NGSruns_folder}/' + post_avt + '_Summaries/all_summary.csv"')
+    lines.append('echo "fastq_id,sample_name,chrom,mappability_score,population_size,gapless_score" > "$merged_csv"')
+    for idx, sn in enumerate(unique_samples, start=1):
+        numbered_dir = "$(printf " + '"%02d"' + " " + str(idx) + ")_" + sn + "_atac"
+        fq_list_str = ",".join(fq for fq, _ in samples_to_fastqs[sn])
         lines.append(
-            f'if [ -f "${{NGSruns_folder}}/{numbered_dir}/ats/bam/metrics/Summary.csv" ]; then '\
-            f'sed 1d "${{NGSruns_folder}}/{numbered_dir}/ats/bam/metrics/Summary.csv" | '\
-            f'sed "s/^/{fastq},{sample_name},/" >> "$merged_csv"; fi'
+            'if [ -f "${NGSruns_folder}/' + numbered_dir + '/ats/bam/metrics/Summary.csv" ]; then '
+            'sed 1d "${NGSruns_folder}/' + numbered_dir + '/ats/bam/metrics/Summary.csv" | '
+            'sed "s/^/' + fq_list_str + ',' + sn + ',/" >> "$merged_csv"; fi'
         )
 
     lines.append("")
