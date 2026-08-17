@@ -1,6 +1,6 @@
 # GECF Scripts
 
-Scripts developed at the **Gene Expression Core Facility (GECF)** for Oxford Nanopore Technology (ONT) data processing. These scripts cover the full workflow from raw pod5 files to basecalled and demultiplexed reads, with QC metrics at each step.
+Scripts developed at the **Gene Expression Core Facility (GECF)** for Oxford Nanopore Technology (ONT) data processing. These scripts cover the full workflow from raw POD5 files to basecalled, demultiplexed, aligned reads, plus custom 10x Genomics reference/template generation and qPCR plate validation — with QC metrics at each step.
 
 ---
 
@@ -13,7 +13,14 @@ Scripts developed at the **Gene Expression Core Facility (GECF)** for Oxford Nan
 - [format_sample_sheet.sh](#format_sample_sheetsh)
 - [demux.sh](#demuxsh)
 - [get_stats.sh](#get_statssh)
-- [filter_adaptive_sampling.sh](#filter_adaptive_samplingsh)
+- [adaptive_sampling_filter.sh](#adaptive_sampling_filtersh)
+- [mapping_bams.sh](#mapping_bamssh)
+- [update_dorado.sh](#update_dodorosh)
+- [generate_cellranger_template_atac.py](#generate_cellranger_template_atacpy)
+- [fasta_to_gtf.py](#fasta_to_gtfpy)
+- [qpcr-template-validator.py](#qpcr-template-validatorpy)
+- [Test Fixtures](#test-fixtures)
+- [Supporting Files](#supporting-files)
 - [Typical Workflows](#typical-workflows)
 
 ---
@@ -72,7 +79,12 @@ chmod +x *.sh
 | `format_sample_sheet.sh` | Generates a sample sheet for demultiplexing |
 | `demux.sh` | Demultiplexes barcoded basecalled BAM files |
 | `get_stats.sh` | Computes sequencing statistics from a BAM file |
-| `filter_adaptive_sampling.sh` | Filters pod5 files using adaptive sampling decisions |
+| `adaptive_sampling_filter.sh` | Filters pod5 files using adaptive sampling decisions |
+| `mapping_bams.sh` | Aligns FASTQ/BAM reads to a reference genome with minimap2 |
+| `update_dorado.sh` | Downloads and installs the latest stable Dorado release |
+| `generate_cellranger_template_atac.py` | Produces a cellranger-atac pipeline script from an AVT Excel file |
+| `fasta_to_gtf.py` | Converts custom multi-FASTA to cellranger-arc-compatible GTF |
+| `qpcr-template-validator.py` | Validates qPCR DNA/PRIMER Hamilton Excel templates before sending to robot |
 
 ---
 
@@ -311,8 +323,178 @@ Then basecall the filtered pod5 file:
 
 ```bash
 bash dorado_basecaller_prod.sh
-# When prompted for the pod5 directory, provide the output directory from the previous step
+# When prompted, point to the filtered pod5 file
 ```
+
+---
+
+## mapping_bams.sh
+
+Aligns FASTQ or BAM reads to a reference genome using **minimap2**, producing sorted and indexed BAM files. Processes single files or entire directories. The script also prints a `samtools flagstat` summary for each file.
+
+### Usage
+
+```bash
+bash mapping_bams.sh -r <reference.fa> -i <input_file_or_folder> [-p <pattern>]
+```
+
+### Options
+
+| Option | Description | Default |
+|---|---|---|
+| `-r <path>` | Reference genome in FASTA format (required) | |
+| `-i <path>` | Path to a single file or directory (required) | |
+| `-p <pattern>` | File pattern/extension to match (e.g. `*.pass.bam`, `*.fastq.gz`) | `*.fq, *.fastq, *.fq.gz, *.fastq.gz, *.bam` |
+| `-h` | Show help message | |
+
+### Supported inputs
+
+- FASTQ / `.fq` (gzipped or uncompressed)
+- BAM — streamed through `samtools fastq` first, then aligned
+
+### Output
+
+For each input file, a sorted and indexed BAM (`<sample>.sorted.bam`) plus its `.bai` index. A flagstat summary is printed to the terminal.
+
+> Uses all available CPU cores via `nproc`.
+
+---
+
+## update_dorado.sh
+
+Automatically downloads and installs the **latest stable** Dorado release from GitHub. Checks for pre-release builds and skips them by default. Detects your OS/architecture automatically.
+
+### Prerequisites
+
+Dorado binaries are platform-specific — this script detects your OS (macOS / Linux) and architecture (x64 / ARM) so you get the right build:
+
+```bash
+conda activate basecaller
+bash update_dorado.sh
+```
+
+> Dorado is required before you can run basecalling (`dorado_basecaller_prod.sh`). The script is also part of the installation process; see [Installation](#installation).
+
+---
+
+## generate_cellranger_template_atac.py
+
+Given an AVT Excel tracking file, generates a ready-to-run shell script that executes `cellranger-atac count` for every sample in the run. Parses the "GECF fastq ID (avidxxxx)" column to locate each sample's FASTQ pair and writes out a properly formatted pipeline wrapper (`<AVT>_cellranger_atac_pipelines.sh`).
+
+### Usage
+
+```bash
+python3 generate_cellranger_template_atac.py file.xlsx
+```
+
+The Excel sheet must contain at least:
+- A `"GECF fastq ID (avidxxxx)"` column linking samples to FASTQ pairs
+- A run name matching `AVT0\d{3,5}` somewhere in the sheet or filename
+
+> After running, check the generated script and verify paths before executing.
+
+---
+
+## fasta_to_gtf.py
+
+Converts a multi-FASTA file (one contig per custom gene) into four GTF lines (gene + transcript + exon + CDS). The output pairs with your FASTA for building a **cellranger-arc** reference (`mkref`). Also writes a cleaned FASTA matching all names used in the GTF.
+
+### Usage
+
+```bash
+python3 fasta_to_gtf.py input.fasta output.gtf
+```
+
+### Output
+
+| Path | Purpose |
+|---|---|
+| `<output>.gtf` | 4 lines per FASTA record (+ strand) |
+| `<output>.clean.fasta` | Cleaned FASTA headers matching GTF contig names |
+
+> Names are sanitized: underscores become hyphens, `|` in headers drops metadata after the first pipe.
+
+---
+
+## qpcr-template-validator.py
+
+Validates DNA and PRIMER Excel workbooks used as input templates for the **Hamilton qPCR workstation** (**v4.03 Hamilton Workstation**) before sending them to the robot. Catches errors early so plate preparation runs smoothly.
+
+The validator checks both **DNA list** and **PRIMER list** sheets (a workbook must contain one or the other, never both). It verifies headers, sample/primer names, tasks, quantities, controls, plate capacity limits, duplicate entries, TaqMan reporter types, and more.
+
+Two independent files work together:
+
+- `qpcr_validation.py` — pure validation core (no UI imports)
+- `qpcr-template-validator.py` — dashboard wrapper with **GUI** and **CLI** modes; loads the core from its sibling path
+
+### Usage
+
+**CLI mode** (headless or scripted):
+
+```bash
+# Single file
+python qpcr-template-validator.py --cli /path/to/DNA_list.xls
+
+# Multiple files
+python qpcr-template-validator.py --cli file1.xls file2.xlsx
+
+# Scan a directory recursively for Excel workbooks
+python qpcr-template-validator.py --cli --dir /path/to/workbook_folder/
+```
+
+**GUI mode:**
+
+```bash
+# File picker popup
+python qpcr-template-validator.py
+
+# Pre-load files into the dashboard
+python qpcr-template-validator.py file1.xls file2.xlsx
+```
+
+### Requirements
+
+- `openpyxl` (for `.xlsx`/`.xlsm`)
+- `xlrd` (for legacy `.xls`)
+
+### Output
+
+Exit code:
+
+| Code | Meaning |
+|---|---|
+| 0 | All workbooks passed |
+| 1 | One or more workbooks has failures |
+
+Results are printed immediately. Each validation checks:
+
+- Correct sheet name (`DNA` or `PRIMER`)
+- Valid headers
+- Task values (STND, NTC, UNKN)
+- Sample/primer name format and uniqueness
+- Quantity validation (NTC = 0, no decimal standards)
+- Presence of controls (NTC + standard curve)
+- Plate capacity limits (192 rows max for DNA, 64 unique primers)
+- TaqMan reporter type
+
+---
+
+## Test Fixtures
+
+A set of **20** pre-built test Excel workbooks live in `test_fixtures/`, covering every validation rule. To install them:
+
+```bash
+cd test_fixtures
+python create_test_fixtures.py
+```
+
+Then verify the validator against all fixtures:
+
+```bash
+python run_fixture_checks.py
+```
+
+See `test_fixtures/README.md` for details on each individual fixture case. Fixtures are not tracked in git (see `.gitignore`).
 
 ---
 

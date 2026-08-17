@@ -466,37 +466,30 @@ def build_script_full(reference_genome, pairs):
     lines.append("CUSTOM_OPTIONS=")
     lines.append("")
 
+    # Generate working folder name with timestamp (expanded in Python, not bash)
+    server_folder_name = f"{main_avt}_CRatac_${{TIMESTAMP}}"
+    
+    lines.append("")
+    lines.append("# Working directory: cellranger-atac output and post-processing live here")
+    lines.append(f"Server_folder=$PWD/{server_folder_name}")
+    lines.append('mkdir -vp "$Server_folder"')
+    lines.append("")
+    lines.append("# Final archive destination (set this to the permanent NGS runs path)")
     example_base_dir = NGS_BASE_DIR_TEMPLATE.format(avt_run=main_avt or "AVTXXXX")
-    lines.extend(f"""
-# Specify input folder (i.e. where cellranger count output files are located)
-# example: /mnt/data/CellRangerCountOutput/
-Server_folder=
-# example: {example_base_dir}/CRatac_${{TIMESTAMP}}
-NGSruns_folder=
-
-# checks if folders exist
-if [[ ! -d "$Server_folder" ]]; then
-    echo "Server folder does not exist."
-    exit 1
-fi
-if [[ ! -d "$NGSruns_folder" ]]; then
-    echo "NGSruns folder does not exist."
-    exit 1
-fi
-
-# Check that the reference genome directory exists
-if [[ ! -d "$reference_genome_used" ]]; then
-    echo "Reference genome '$reference_genome_used' does not exist. Aborting."
-    exit 1
-fi
-
-#------------------------------------- MAIN -------------------------------------#
-""".strip("\n").splitlines())
+    lines.append(f"# example: {example_base_dir}/CRatac_${{TIMESTAMP}}")
+    lines.append("NGSruns_folder=")
+    lines.append("")
+    lines.append("# Check that the reference genome directory exists")
+    lines.append('if [[ ! -d "${reference_genome_used}" ]]; then')
+    lines.append("    echo \"Reference genome '${reference_genome_used}' does not exist. Aborting.\" >&2")
+    lines.append("    exit 1")
+    lines.append("fi")
+    lines.append("")
     lines.append("")
 
     for idx, sn in enumerate(unique_samples, start=1):
         fastqs = samples_to_fastqs[sn]
-        numbered_dir = "$(printf " + '"%02d"' + " " + str(idx) + ")_" + sn + "_atac"
+        numbered_dir = f"{idx:02d}_{sn}_atac"
         fq_list_str = ",".join(fq for fq, _ in fastqs)
 
         lines.append("# --- Sample " + str(idx) + ": " + sn + " (" + str(len(fastqs)) + " FASTQ(s)) ---")
@@ -507,46 +500,59 @@ fi
         # Build space-separated path list for all FASTQ dirs of this sample
         fq_paths = " ".join("${path_" + sn + "_" + fq + "}" for fq, _ in fastqs)
         lines.append("                       --fastqs=" + fq_paths + r" \\")
-        lines.append("                       --output=${NGSruns_folder}/" + numbered_dir + r" \\")
+        lines.append("                       --output=${Server_folder}/" + numbered_dir + r" \\")
         lines.append("                       ${CUSTOM_OPTIONS}")
         lines.append("")
 
         lines.append("# Clean up SC_ATAC_COUNTER_CS (non-useful)")
         lines.append(
-            "rm -rf ${NGSruns_folder}/" + numbered_dir + "/sc/atac/count/" + sn + "_atac/sc_atac_counter_cs/* 2>/dev/null || true"
+            "rm -r ${Server_folder}/" + numbered_dir + "/SC_ATAC_COUNTER_CS 2>/dev/null || true"
         )
         lines.append("")
 
     post_avt = main_avt or "MIXED_runs"
-    # Post-processing: collect WebSummaries into a {post_avt}_Summaries folder
+    # Post-processing in Server_folder; rsync everything to NGSruns_folder at the end
     lines.append("")
     lines.append("# ------------------------------------ POST-PROCESSING ------------------------------------ #")
     lines.append("")
-    lines.append("# Collect per-sample WebSummaries into one folder")
-    lines.append(f"mkdir -p ${{NGSruns_folder}}/{post_avt}_Summaries")
+    lines.append("# Collect per-sample web summary HTMLs into one folder for easy browsing")
+    lines.append(f"mkdir -p ${{Server_folder}}/{post_avt}_Summaries/web_summaries")
     lines.append("")
     for idx, sn in enumerate(unique_samples, start=1):
-        numbered_dir = "$(printf " + '"%02d"' + " " + str(idx) + ")_" + sn + "_atac"
+        ndir = f'{idx:02d}_{sn}_atac/outs'
         lines.append(
-            "cp -n ${NGSruns_folder}/" + numbered_dir + "/ats/bam/web_summary/index.html "
-            "${NGSruns_folder}/" + post_avt + "_Summaries/" + sn + "_WebSummary.html 2>/dev/null || true"
+            f"cp -n ${{Server_folder}}/{ndir}/web_summary.html "
+            f"${{Server_folder}}/{post_avt}_Summaries/web_summaries/{sn}_WebSummary.html 2>/dev/null || true"
         )
     lines.append("")
 
-    # Merge per-sample summary CSVs into a single file
-    merged_csv_quote = '"$' + 'NGSruns_folder}' + '/' + post_avt + '_Summaries/all_summary.csv"'
-    lines.append("# Merge per-sample summary CSVs into a single file")
-    lines.append('merged_csv="${NGSruns_folder}/' + post_avt + '_Summaries/all_summary.csv"')
-    lines.append('echo "fastq_id,sample_name,chrom,mappability_score,population_size,gapless_score" > "$merged_csv"')
+    # Merge per-sample summary.csv (run-level QC metrics) across all samples into one file
+    lines.append(
+        "# Merge run-level QC metrics (summary.csv) from each sample into a single consolidated table"
+    )
+    lines.append(
+        f'merged_csv="${{Server_folder}}/{post_avt}_Summaries/all_summary.csv"'
+    )
+    lines.append("header_csv_set=false")
     for idx, sn in enumerate(unique_samples, start=1):
-        numbered_dir = "$(printf " + '"%02d"' + " " + str(idx) + ")_" + sn + "_atac"
-        fq_list_str = ",".join(fq for fq, _ in samples_to_fastqs[sn])
+        ndir = f'{idx:02d}_{sn}_atac/outs'
+        src = f'${{Server_folder}}/{ndir}/summary.csv'
         lines.append(
-            'if [ -f "${NGSruns_folder}/' + numbered_dir + '/ats/bam/metrics/Summary.csv" ]; then '
-            'sed 1d "${NGSruns_folder}/' + numbered_dir + '/ats/bam/metrics/Summary.csv" | '
-            'sed "s/^/' + fq_list_str + ',' + sn + ',/" >> "$merged_csv"; fi'
+            'if [ -f "' + src + '" ]; then '
+            'if [ "$header_csv_set" = false ]; then '
+            'cp "' + src + '" "$merged_csv"; '
+            'header_csv_set=true; else '
+            'tail -n +2 "' + src + '" >> "$merged_csv"; fi; '
+            'else echo "WARNING: ' + src + ' not found" >&2; fi'
         )
+    lines.append("")
 
+    # Rsync everything from Server_folder to NGSruns_folder in one shot
+    lines.append("")
+    lines.append("# ------------------------------------ DEPLOY TO NGS RUNS FOLDER ------------------------------------ #")
+    lines.append("")
+    lines.append("# Rsync all results (sample dirs + Summaries folder) to the permanent location in one command")
+    lines.append("rsync -a --progress ${Server_folder}/ ${NGSruns_folder}")
     lines.append("")
     return "\n".join(lines) + "\n"
 

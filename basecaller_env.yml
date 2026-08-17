@@ -21,3 +21,4 @@ dependencies:
   - pip:
     - pod5
     - sequali
+    - openpyxl
