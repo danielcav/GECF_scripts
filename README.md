@@ -498,6 +498,16 @@ See `test_fixtures/README.md` for details on each individual fixture case. Fixtu
 
 ---
 
+## Supporting Files
+
+| Path | Purpose |
+|---|---|
+| `basecaller_env.yml` | Conda environment definition for Dorado basecalling (pre-built models excluded) |
+| `.gitignore` | Excludes large artifacts: `.xlsx` test fixtures, `.local/`, and generated BAMs |
+| `test_fixtures/` | Test fixture generators and runner; see [Test Fixtures](#test-fixtures) above |
+
+---
+
 ## Typical Workflows
 
 ### Standard simplex or duplex run (non-barcoded)
