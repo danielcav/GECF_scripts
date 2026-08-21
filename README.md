@@ -1,6 +1,6 @@
 # GECF Scripts
 
-Scripts developed at the **Gene Expression Core Facility (GECF)** for Oxford Nanopore Technology (ONT) data processing. These scripts cover the full workflow from raw POD5 files to basecalled, demultiplexed, aligned reads, plus custom 10x Genomics reference/template generation and qPCR plate validation — with QC metrics at each step.
+Scripts developed at the **Gene Expression Core Facility (GECF)** for Oxford Nanopore Technology (ONT) data processing. These scripts cover the full workflow from raw POD5 files to basecalled, demultiplexed, aligned reads, plus custom 10x Genomics reference/template generation and qPCR plate validation.
 
 ---
 
