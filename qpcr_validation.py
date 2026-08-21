@@ -81,7 +81,7 @@ def _read_all(sheet):
         def cv(r, c):
             v = sheet.cell_value(r, c)
             if isinstance(v, float) and r > 0:
-                return str(v).strip()
+                return (str(int(v)) if v == int(v) else str(v)).strip()
             if isinstance(v, str):
                 return str(v).strip()
             return v
