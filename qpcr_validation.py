@@ -51,7 +51,7 @@ def _load_sheet(filepath, expected):
     try:
         if filepath.endswith('.xls'):
             import xlrd as _xlrd
-            wb = _xlrd.open_workbook(filepath)
+            wb = _xlrd.open_workbook(filepath, formatting_info=True)
             names = [s.name for s in wb.sheets()]
             sheet = next((s for s in wb.sheets() if s.name == expected), None)
         elif filepath.endswith(('.xlsx', '.xlsm')):
@@ -135,6 +135,7 @@ def validate_dna_list(filepath):
                           f"{bn}: The header is not correct. Expected {list(expected_hdr)}, "
                           f"but found {list(hdr)}."))
 
+    # Process real data rows; blank rows are detected below in a dedicated pass
     pcap = 0
     for ri, row in enumerate(rows[1:], start=2):
         pos_v  = row[0] if len(row) > 0 else None
@@ -144,8 +145,6 @@ def validate_dna_list(filepath):
         ctx = f"Row {ri}"
 
         if all(is_blank(v) for v in row):
-            msgs.append(Issue(Issue.FAIL,
-                f"{ctx}: This DNA row is completely empty. Delete the row or fill in all required values."))
             continue
 
         pcap += 1
@@ -205,7 +204,21 @@ def validate_dna_list(filepath):
 
     # --- Post-row checks --------------------------------------------------
 
-    # Check for at least 1 DNA row, and enforce hard cap (192 samples) on total DNA rows
+    # Count trailing blank rows (consecutive blanks at end of sheet)
+    data_len = len(rows) - 1  # rows without header
+    trailing_blanks = 0
+    for idx in range(data_len - 1, -1, -1):
+        row = rows[idx + 1]  # +1 because row index 0 is the header
+        if all(is_blank(v) for v in row):
+            trailing_blanks += 1
+        else:
+            break
+    if trailing_blanks > 0:
+        msgs.append(Issue(Issue.FAIL,
+            f"{bn}: DNA sheet has {trailing_blanks} trailing blank row(s). "
+            "Delete the empty rows at the end of the sheet."))
+
+    # Check for at least 1 DNA row...
     total_dna_rows = pcap
     if total_dna_rows == 0:
         msgs.append(Issue(Issue.FAIL,
@@ -317,9 +330,7 @@ def validate_primer_list(filepath):
         ctx = f"Row {ri}"
 
         if all(is_blank(v) for v in row):
-            msgs.append(Issue(Issue.FAIL,
-                f"{ctx}: This PRIMER row is completely empty. Delete the row or fill in all required values."))
-            continue
+            continue  # trailing blanks detected below in a dedicated pass
 
         name_str   = str(nmv).strip() if not is_blank(nmv) else ""
         report_str = str(repv).strip().upper() if not is_blank(repv) else ""
@@ -376,6 +387,20 @@ def validate_primer_list(filepath):
         msgs.append(Issue(Issue.OK,
             f"{bn}: Found {pc} primer name-pairs "
             f"(maximum allowed: {MAX_PRIMER_CUPLES})"))
+
+    # Count trailing blank rows (consecutive blanks at end of sheet) — PRIMER
+    data_len = len(rows) - 1
+    trailing_blanks = 0
+    for _idx in range(data_len - 1, -1, -1):
+        _row = rows[_idx + 1]
+        if all(is_blank(v) for v in _row):
+            trailing_blanks += 1
+        else:
+            break
+    if trailing_blanks > 0:
+        msgs.append(Issue(Issue.FAIL,
+            f"{bn}: PRIMER sheet has {trailing_blanks} trailing blank row(s). "
+            "Delete the empty rows at the end of the sheet."))
 
     return msgs, pcap
 
